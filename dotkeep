@@ -1,0 +1,365 @@
+#!/bin/bash
+# shellcheck disable=SC2154
+set -euo pipefail
+
+NAME=dotkeep
+DOTCONF=.$NAME.conf
+XDGCONF=$NAME.conf
+HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+ROOT=
+MANIFEST=
+RSYNC=(rsync -a --delete --no-owner --no-group)
+
+function palette {
+  local i
+  r=
+  for i in {0..7}; do
+    printf -v "c$i" ''
+    printf -v "C$i" ''
+  done
+  [[ -t 1 && -z ${NO_COLOR:-} ]] || return 0
+  for i in {0..7}; do
+    printf -v "c$i" '\033[3%sm' "$i"
+    printf -v "C$i" '\033[1;3%sm' "$i"
+  done
+  r=$'\033[0m'
+}
+palette
+
+# type → "prefix colorVar"
+declare -A LOG=(
+  [ok]='⇒ C2'
+  [info]='·· C4'
+  [warn]='!! C3'
+  [err]='✗✗ C1'
+  [step]='»» C6'
+)
+
+# log TYPE TITLE [DETAIL...]
+# DETAIL parts join with →
+function log {
+  local type=$1 title=${2-} spec pre cn fd=1
+  shift 2 || true
+  spec=${LOG[$type]-'·· c7'}
+  pre=${spec%% *}
+  cn=${spec##* }
+  local -n col=$cn
+  [[ $type == err ]] && fd=2
+  {
+    printf '%s%s%s %s%s%s' "$col" "$pre" "$r" "$col" "$title" "$r"
+    (($#)) && printf '  %s%s' "$c7" "$1" && shift
+    local x
+    for x; do printf ' %s→%s %s%s' "$c7" "$r" "$c7" "$x"; done
+    printf '%s\n' "$r"
+  } >&"$fd"
+}
+
+function die {
+  log err fatal "$*"
+  exit 1
+}
+
+function conf_paths {
+  [[ ${DOTKEEP_ROOT-} ]] && {
+    printf '%s\n' "${DOTKEEP_ROOT%/}/$DOTCONF" "${DOTKEEP_ROOT%/}/$XDGCONF"
+    return
+  }
+  printf '%s\n' \
+    "$PWD/$DOTCONF" \
+    "$HOME/.$NAME/$DOTCONF" \
+    "$HOME/.config/$NAME/$XDGCONF"
+}
+
+# resolve config → MANIFEST + ROOT (repo = dirname of config)
+# 1. ./.dotkeep.conf
+# 2. ~/.dotkeep/.dotkeep.conf
+# 3. ~/.config/dotkeep/dotkeep.conf
+function discover {
+  local f
+  while IFS= read -r f; do
+    [[ -f $f ]] || continue
+    MANIFEST=$f
+    ROOT=$(dirname "$f")
+    return
+  done < <(conf_paths)
+  [[ ${DOTKEEP_ROOT-} ]] && die "no $DOTCONF in DOTKEEP_ROOT=$DOTKEEP_ROOT"
+  die "no config; tried ./$DOTCONF ~/.$NAME/$DOTCONF ~/.config/$NAME/$XDGCONF (or run init)"
+}
+
+function norm {
+  local IFS=/ p
+  local -a out=()
+  for p in $1; do
+    case $p in
+    '' | .) ;;
+    ..)
+      ((${#out[@]} > 1)) || return 1
+      unset 'out[-1]'
+      ;;
+    *) out+=("$p") ;;
+    esac
+  done
+  ((${#out[@]} >= 2)) || return 1
+  [[ ${out[0]} == home || ${out[0]} == root ]] || return 1
+  IFS=/
+  printf '%s\n' "${out[*]}"
+}
+
+function resolve {
+  case $1 in
+  home/*) printf '%s/%s\n' "$HOME" "${1#home/}" ;;
+  root/*) printf '/%s\n' "${1#root/}" ;;
+  *) return 1 ;;
+  esac
+}
+
+function trim {
+  local s=${1%%#*}
+  s=${s#"${s%%[![:space:]]*}"}
+  printf '%s\n' "${s%"${s##*[![:space:]]}"}"
+}
+
+function read_entries {
+  [[ -f $MANIFEST ]] || die "missing manifest at $MANIFEST"
+  local line
+  while IFS= read -r line || [[ $line ]]; do
+    line=$(trim "$line")
+    [[ $line ]] && printf '%s\n' "$line"
+  done <"$MANIFEST"
+}
+
+function reject_overlap {
+  local -n _paths=$1
+  local -a s=()
+  ((${#_paths[@]} < 2)) && return 0
+  mapfile -t s < <(printf '%s\n' "${_paths[@]}" | sort)
+  local i
+  for ((i = 1; i < ${#s[@]}; i++)); do
+    [[ ${s[i]} != "${s[i - 1]}"/* ]] || die "overlap: ${s[i - 1]} contains ${s[i]}"
+  done
+}
+
+function canon {
+  local n
+  [[ $1 != *['$~']* ]] || die "forbidden char in: $1"
+  n=$(norm "$1") || die "invalid path: $1"
+  printf '%s\n' "$n"
+}
+
+function parse {
+  local dest=$1
+  local -n _out=$1
+  local raw n
+  local -A seen=()
+  _out=()
+  shift
+  for raw; do
+    n=$(canon "$raw")
+    [[ -v seen[$n] ]] && die "duplicate: $n"
+    seen[$n]=1
+    _out+=("$n")
+  done
+  reject_overlap "$dest"
+}
+
+function load_valid {
+  local -a raws=()
+  mapfile -t raws < <(read_entries)
+  parse "$1" "${raws[@]}"
+}
+
+function entries {
+  load_valid "$1"
+  local -n _e=$1
+  ((${#_e[@]})) || die "manifest is empty"
+}
+
+function pairs {
+  local e
+  for e; do printf '%s\t%s\t%s\n' "$e" "$(resolve "$e")" "$ROOT/$e"; done
+}
+
+function clash {
+  [[ -e $1 && -e $2 ]] || return 1
+  [[ (-d $1 && -f $2) || (-f $1 && -d $2) ]]
+}
+
+# sync SRC DST. directory or file; true sync with --delete
+function sync_path {
+  local src=$1 dst=$2
+  mkdir -p "$(dirname "$dst")"
+  [[ -d $src ]] && {
+    mkdir -p "$dst"
+    "${RSYNC[@]}" "$src/" "$dst/"
+    return
+  }
+  "${RSYNC[@]}" "$src" "$dst"
+}
+
+function sample_box {
+  local f line shown pad i top='' bot='' W=0
+  local -a samples=()
+  f=$HERE/dotkeep.conf.sample
+  [[ -f $f ]] || return 0
+  mapfile -t samples <"$f"
+  for line in "${samples[@]}" "$DOTCONF"; do
+    ((${#line} > W)) && W=${#line}
+  done
+  ((W += 2))
+  for ((i = 0; i < W - 1 - ${#DOTCONF}; i++)); do top+=─; done
+  for ((i = 0; i < W + 2; i++)); do bot+=─; done
+  printf '  %s╭─ %s%s%s %s╮%s\n' "$c7" "$C1" "$DOTCONF" "$c7" "$top" "$r"
+  for line in "${samples[@]}"; do
+    shown=$line
+    case $line in
+    home/*) shown="${C2}home${c6}/${line#home/}${c7}" ;;
+    root/*) shown="${C2}root${c6}/${line#root/}${c7}" ;;
+    '#'*) shown="${c7}${line}${c7}" ;;
+    esac
+    pad=$(printf '%*s' $((W - ${#line})) '')
+    printf '  %s│ %s%s │%s\n' "$c7" "$shown" "$pad" "$r"
+  done
+  printf '  %s╰%s╯%s\n' "$c7" "$bot" "$r"
+}
+
+function cmd_help {
+  cat <<EOF
+${C4}dotkeep${r}
+  ${c7}Sync the paths you list between machine and git${r}
+
+  Config owns inventory. Git owns history. The tool only syncs.
+
+${C3}CONFIG${r}
+  ${C2}home/.zshrc${r}       is  ${c2}\$HOME/.zshrc${r}
+  ${C2}root/etc/hosts${r}    is  ${c2}/etc/hosts${r}
+  Same path in the repo.
+
+  Plain file. One path per line. ${c7}#${r} comments.
+  Every entry must start with ${C2}home/${r} or ${C2}root/${r}.
+  No ${c1}~${r}, no absolute ${c1}/${r} forms, no ${c1}\$VAR${r} expansion.
+  Prefer explicit files over whole dirs when the tree holds cache/state.
+
+EOF
+  sample_box
+  cat <<EOF
+
+  ${c7}repo/${r}
+  ${c7}├── $DOTCONF${r}
+  ${c6}├── home/${r}
+  ${c6}└── root/${r}
+
+  Discovery, first hit wins. Repo = directory of the config file.
+    ${C2}1.${r} ${c7}./$DOTCONF${r}
+    ${C2}2.${r} ${c7}~/.$NAME/$DOTCONF${r}
+    ${C2}3.${r} ${c7}~/.config/$NAME/$XDGCONF${r}
+
+${C3}WORKFLOW${r}
+  ${C2}init${r} → edit ${c6}$DOTCONF${r} → ${C2}check${r} → ${C2}backup${r} → git
+  New machine: ${C2}restore${r}
+  Restore copies existing targets to ${C2}/tmp/$NAME.XXXXXX/${r} first.
+
+${C3}COMMANDS${r}
+  ${C4}dotkeep${r} ${c6}<command>${r} [args]
+  ${C2}init${r} [DIR]      ${c6}home/${r} ${c6}root/${r} + empty ${c6}$DOTCONF${r}
+  ${C2}check${r}           validate + resolve paths
+  ${C2}backup${r}          machine → repo
+  ${C2}restore${r}         repo → machine (${c7}/tmp safety copy first${r})
+  ${C2}help${r}
+
+${C3}ENV${r}
+  ${C4}DOTKEEP_ROOT${r}  skips discovery
+  ${C4}NO_COLOR${r}      disables color
+EOF
+}
+
+function cmd_init {
+  local dir=${1:-.} conf=$DOTCONF
+  dir=${dir%/}
+  [[ $dir == */.config/$NAME ]] && conf=$XDGCONF
+  mkdir -p "$dir/home" "$dir/root"
+  [[ -e $dir/$conf ]] || : >"$dir/$conf"
+  log ok init "$dir" "$dir/$conf"
+}
+
+function cmd_check {
+  local es=() e fs repo err=0
+  entries es
+  while IFS=$'\t' read -r e fs repo; do
+    log step entry "$e"
+    log info fs "$fs"
+    log info repo "$repo"
+    [[ -e $fs ]] || {
+      log err miss "missing on machine"
+      err=1
+      continue
+    }
+    [[ -e $repo ]] || {
+      log warn miss "missing in repo"
+      continue
+    }
+    clash "$fs" "$repo" || continue
+    log err type "type mismatch"
+    err=1
+  done < <(pairs "${es[@]}")
+  ((err == 0)) || die "check failed"
+  log ok check "${#es[@]} entries"
+}
+
+function cmd_backup {
+  local es=() e fs repo
+  entries es
+  log step backup "machine → repo (${#es[@]} paths)"
+  while IFS=$'\t' read -r e fs repo; do
+    [[ -e $fs ]] || die "missing on machine: $fs"
+    clash "$fs" "$repo" && die "type mismatch: $e"
+    sync_path "$fs" "$repo"
+    log ok sync "$fs" "$repo"
+  done < <(pairs "${es[@]}")
+  log ok 'backup done'
+}
+
+function cmd_restore {
+  local es=() e fs repo bak n=0
+  entries es
+  bak=$(mktemp -d /tmp/dotkeep.XXXXXX)
+  log step safety "$bak"
+  while IFS=$'\t' read -r e fs repo; do
+    [[ -e $repo ]] || die "missing in repo: $repo"
+    [[ -e $fs ]] || continue
+    clash "$fs" "$repo" && die "type mismatch: $e"
+    sync_path "$fs" "$bak/$e"
+    log info save "$fs" "$bak/$e"
+    ((++n))
+  done < <(pairs "${es[@]}")
+  ((n)) && log ok safety "$n paths" "$bak"
+  ((n)) || log warn safety "nothing on machine to save"
+
+  log step restore "repo → machine (${#es[@]} paths)"
+  while IFS=$'\t' read -r e fs repo; do
+    sync_path "$repo" "$fs"
+    log ok sync "$repo" "$fs"
+  done < <(pairs "${es[@]}")
+  log ok 'restore done'
+  ((n)) && log info undo "$bak"
+}
+
+cmd=${1:-help}
+shift || true
+case $cmd in
+help | -h | --help)
+  cmd_help
+  exit
+  ;;
+init)
+  cmd_init "$@"
+  exit
+  ;;
+check | backup | restore) ;;
+*) die "unknown command: $cmd (try: $NAME help)" ;;
+esac
+discover
+cfg=$(basename "$MANIFEST")
+cd "$ROOT"
+ROOT=.
+MANIFEST=./$cfg
+"cmd_$cmd" "$@"

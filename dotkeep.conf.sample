@@ -1,0 +1,16 @@
+# shell / editor
+home/.zshrc
+home/.config/nvim
+home/.config/tmux/tmux.conf
+
+# git / ssh
+home/.gitconfig
+home/.ssh/config
+
+# prefer files over whole dirs
+home/.config/foo/config.toml
+home/.config/foo/themes
+
+# system
+root/etc/hosts
+root/etc/sysctl.d
