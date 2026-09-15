@@ -8,6 +8,11 @@ ROOT=
 MANIFEST=
 RSYNC=(rsync -rptgo --delete --no-owner --no-group --exclude=.git)
 
+((BASH_VERSINFO[0] >= 5)) || {
+  printf '%s: need bash 5+, found %s\n' "$NAME" "${BASH_VERSION:-?}" >&2
+  exit 1
+}
+
 for bin in basename cat dirname git mkdir mktemp readlink rsync sed sort tput tree; do
   command -v "$bin" >/dev/null && continue
   printf '%s: missing command: %s\n' "$NAME" "$bin" >&2
@@ -264,7 +269,9 @@ function conf::read {
   local line
   while IFS= read -r line || [[ $line ]]; do
     line=$(path::trim "$line")
-    [[ $line ]] && printf '%s\n' "$line"
+    if [[ $line ]]; then
+      printf '%s\n' "$line"
+    fi
   done <"$MANIFEST"
 }
 
@@ -276,8 +283,13 @@ function conf::parse {
   _out=()
   shift
   for raw; do
+    if [[ -z $raw ]]; then
+      continue
+    fi
     n=$(path::canon "$raw")
-    [[ -v seen[$n] ]] && ui::die "duplicate: $n"
+    if [[ -v seen[$n] ]]; then
+      continue
+    fi
     seen[$n]=1
     _out+=("$n")
   done
@@ -390,14 +402,24 @@ function sync::preview {
 }
 
 function sync::path {
-  local src=$1 dst=$2
+  local src=$1 dst=$2 rc=0 err
   mkdir -p "$(dirname "$dst")"
-  [[ -d $src ]] && {
+  if [[ -d $src ]]; then
     mkdir -p "$dst"
-    "${RSYNC[@]}" "$src/" "$dst/"
-    return
-  }
-  "${RSYNC[@]}" "$src" "$dst"
+    err=$("${RSYNC[@]}" "$src/" "$dst/" 2>&1) || rc=$?
+  else
+    err=$("${RSYNC[@]}" "$src" "$dst" 2>&1) || rc=$?
+  fi
+  if ((rc == 0)); then
+    return 0
+  fi
+  # 23 partial (perms), 24 vanished mid-transfer
+  if ((rc == 23 || rc == 24)); then
+    ui::log warn skip "$src" "unreadable or vanished files"
+    return 0
+  fi
+  [[ $err ]] && printf '%s\n' "$err" >&2
+  return "$rc"
 }
 
 function sync::safety {
@@ -424,16 +446,16 @@ function sync::safety {
 function sync::one {
   local side=$1 e=$2 fs=$3 repo=$4 src=$5 dst=$6 from=$7 to=$8
   path::clash "$fs" "$repo" && ui::die "type mismatch: $e"
-  sync::path "$src" "$dst"
   case $side in
   backup) ui::log path '' "${c6}$from" ;;
   restore) ui::log info '' "${c2}$to" ;;
   esac
+  sync::path "$src" "$dst"
 }
 
 function sync::prune {
   [[ -d .git ]] || return 0
-  git clean -Xdf -- home root
+  git clean -Xdfq -- home root
 }
 
 function sync::git {
