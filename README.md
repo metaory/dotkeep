@@ -1,8 +1,8 @@
 <div align="center">
   <img src=".github/assets/logo.jpg" alt="dotkeep" width="80%">
-  <h4>Dotfiles, kept simple</h4>
   <br>
   <h2>dotkeep</h2>
+  <h4>Dotfiles, kept simple</h4>
   <p>A single plain-text manifest for syncing configuration with Git</p>
 </div>
 
