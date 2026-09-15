@@ -16,13 +16,9 @@
 </p>
 
 <div align="center">
-  <video
-    src=".github/assets/help.webm"
-    autoplay
-    loop
-    muted
-    playsinline
-  ></video>
+
+[help.webm](https://github.com/user-attachments/assets/35a0f170-98b2-4fc4-b799-a15ab1fd0b0f)
+
 </div>
 
 ---

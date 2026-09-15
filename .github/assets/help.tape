@@ -9,7 +9,7 @@ Set Shell "bash"
 Set FontSize 24
 Set BorderRadius 20
 Set Width 1260
-Set Height 1300
+Set Height 1250
 Set Margin 80
 Set MarginFill "#111122"
 Set Padding 30
