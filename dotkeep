@@ -1,43 +1,51 @@
 #!/bin/bash
 # shellcheck disable=SC2154
-set -euo pipefail
+set -Eeuo pipefail
 
 NAME=dotkeep
 DOTCONF=.$NAME.conf
-XDGCONF=$NAME.conf
-HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 ROOT=
 MANIFEST=
 RSYNC=(rsync -a --delete --no-owner --no-group)
 
-function palette {
+function ui::nl { printf '\n'; }
+
+function ui::palette {
   local i
   r=
-  for i in {0..7}; do
+  it=
+  b=
+  for i in {0..255}; do
     printf -v "c$i" ''
     printf -v "C$i" ''
   done
   [[ -t 1 && -z ${NO_COLOR:-} ]] || return 0
-  for i in {0..7}; do
-    printf -v "c$i" '\033[3%sm' "$i"
-    printf -v "C$i" '\033[1;3%sm' "$i"
+  for i in {1..255}; do
+    printf -v "c$i" '\033[38;5;%sm' "$i"
+    printf -v "C$i" '\033[38;5;%s;1m' "$i"
   done
   r=$'\033[0m'
+  it=$'\033[3m'
+  b=$'\033[1m'
 }
-palette
+ui::palette
+
+readonly border_color=$c8
 
 # type → "prefix colorVar"
 declare -A LOG=(
   [ok]='⇒ C2'
-  [info]='·· C4'
+  [info]=':> c33'
   [warn]='!! C3'
   [err]='✗✗ C1'
-  [step]='»» C6'
+  [step]='=> C6'
+  [path]='·> C2'
 )
 
-# log TYPE TITLE [DETAIL...]
+# ui::log TYPE TITLE [DETAIL...]
 # DETAIL parts join with →
-function log {
+# empty TITLE skips the title column
+function ui::log {
   local type=$1 title=${2-} spec pre cn fd=1
   shift 2 || true
   spec=${LOG[$type]-'·· c7'}
@@ -46,47 +54,303 @@ function log {
   local -n col=$cn
   [[ $type == err ]] && fd=2
   {
-    printf '%s%s%s %s%s%s' "$col" "$pre" "$r" "$col" "$title" "$r"
+    printf '%s%-2s%s' "$col" "$pre" "$r"
+    [[ $title ]] && printf ' %s%-5s%s' "$col" "$title" "$r"
     (($#)) && printf '  %s%s' "$c7" "$1" && shift
     local x
-    for x; do printf ' %s→%s %s%s' "$c7" "$r" "$c7" "$x"; done
+    for x; do printf ' %s→%s %s%s' "$c7" "$r" "$c6" "$x"; done
     printf '%s\n' "$r"
   } >&"$fd"
 }
 
-function die {
-  log err fatal "$*"
+function ui::divider {
+  local colr="${1:-c5}"
+  local char="${2:-─}"
+  local word="${3:-}"
+  local len="$(($(tput cols) - ${#word} - 2))"
+  local left="$((len / 2))"
+  local right="$((len - left))"
+  colr="${!colr-}"
+  printf '%*s %s %*s\n' "$left" '' "${c57-}$word${r}" "$right" '' |
+    sed "s/ /${colr}$char/g"
+}
+
+function ui::fatal {
+  local msg=$1 tip=${2-}
+  ui::nl
+  ui::divider c1 ━
+  {
+    [[ $c1 ]] && printf '\n  \033[48;5;197;38;5;16;1m ✗✗  %s \033[0m\n' "$msg"
+    [[ $c1 ]] || printf '\n  ✗✗  %s \n' "$msg"
+    [[ $tip ]] && printf '\n%s tip:%s  %s%s%s\n' "$c6" "$r" "$c3" "$tip" "$r"
+  } >&2
   exit 1
 }
 
-function conf_paths {
-  [[ ${DOTKEEP_ROOT-} ]] && {
-    printf '%s\n' "${DOTKEEP_ROOT%/}/$DOTCONF" "${DOTKEEP_ROOT%/}/$XDGCONF"
-    return
+function ui::die {
+  ui::fatal "$*" "$NAME help"
+}
+
+function ui::error {
+  local code=$1 line=$2 cmd=$3
+  trap - ERR
+  ui::fatal "command failed ($code): $cmd" "line $line"
+}
+
+trap 'ui::error "$?" "$LINENO" "$BASH_COMMAND"' ERR
+
+function ui::paint {
+  local line=${1%$'\r'}
+  line=${line#"${line%%[![:space:]]*}"}
+  line=${line%"${line##*[![:space:]]}"}
+  case $line in
+  home/*) printf '%s%s%s/%s%s' "$c2" home "$c6" "${line#home/}" "$border_color" ;;
+  root/*) printf '%s%s%s/%s%s' "$c2" root "$c6" "${line#root/}" "$border_color" ;;
+  '#'*) printf '%s%s' "${C60}" "$line$border_color" ;;
+  '') printf '%s' "$border_color" ;;
+  *) printf '%s%s' "$c7" "$line$border_color" ;;
+  esac
+}
+
+# view::config TITLE LINE... — box render (help sample, config, backup/restore)
+function view::config {
+  local title=$1 line vis pad i top='' bot='' width dashes llen=0
+  shift
+  local -a lines=("$@") vises=()
+  for line in "${lines[@]}"; do
+    vis=${line%$'\r'}
+    vis=${vis#"${vis%%[![:space:]]*}"}
+    vis=${vis%"${vis##*[![:space:]]}"}
+    vises+=("$vis")
+    ((${#vis} > llen)) && llen=${#vis}
+  done
+  # title: ╭─ TITLE ─…╮  → width = title + dashes + 5
+  # body:  │ TEXT  … │  → TEXT+pad = width - 4
+  dashes=1
+  width=$((${#title} + dashes + 5))
+  ((width < llen + 4)) && {
+    width=$((llen + 4))
+    dashes=$((width - ${#title} - 5))
   }
-  printf '%s\n' \
-    "$PWD/$DOTCONF" \
-    "$HOME/.$NAME/$DOTCONF" \
-    "$HOME/.config/$NAME/$XDGCONF"
+  for ((i = 0; i < dashes; i++)); do top+=─; done
+  for ((i = 0; i < width - 2; i++)); do bot+=─; done
+  printf '  %s╭─ %s%s%s %s╮%s\n' "$border_color" "$c1" "$title" "$border_color" "$top" "$r"
+  for i in "${!lines[@]}"; do
+    pad=$(printf '%*s' $((width - 4 - ${#vises[i]})) '')
+    printf '  %s│ %s%s │%s\n' "$border_color" "$(ui::paint "${lines[i]}")" "$pad" "$r"
+  done
+  printf '  %s╰%s╯%s\n' "$border_color" "$bot" "$r"
 }
 
-# resolve config → MANIFEST + ROOT (repo = dirname of config)
-# 1. ./.dotkeep.conf
-# 2. ~/.dotkeep/.dotkeep.conf
-# 3. ~/.config/dotkeep/dotkeep.conf
-function discover {
-  local f
-  while IFS= read -r f; do
-    [[ -f $f ]] || continue
-    MANIFEST=$f
-    ROOT=$(dirname "$f")
-    return
-  done < <(conf_paths)
-  [[ ${DOTKEEP_ROOT-} ]] && die "no $DOTCONF in DOTKEEP_ROOT=$DOTKEEP_ROOT"
-  die "no config; tried ./$DOTCONF ~/.$NAME/$DOTCONF ~/.config/$NAME/$XDGCONF (or run init)"
+# view::manifest [TITLE] — load $MANIFEST into the shared box
+function view::manifest {
+  local title=${1:-$MANIFEST}
+  local -a lines=()
+  mapfile -t lines <"$MANIFEST"
+  view::config "$title" "${lines[@]}"
 }
 
-function norm {
+function help::intro {
+  cat <<EOF
+${C6} dotkeep ${c7}// ${c2}dotfiles, kept simple${r}
+
+${it}${c7}  A single plain-text manifest for syncing configuration with Git${r}
+EOF
+  ui::divider c8 ─
+}
+
+function help::init {
+  cat <<EOF
+${C3}INIT${r}
+${C2}  $NAME init${r} [DIR]
+  Creates ${c6}home/${r} ${c6}root/${r} + empty ${c6}$DOTCONF${r} + ${c6}git init${r}
+
+${it}  Or skip init: mkdir a dir and write ${c6}$DOTCONF${r} yourself${r}
+${it}  Next: ${C2}cd${r} into that dir, edit ${c6}$DOTCONF${r}, then ${c2}$NAME backup${r}
+EOF
+  ui::divider c8 -
+}
+
+function help::config {
+  cat <<EOF
+${C3}CONFIG${r}
+${C2}  $NAME ${c2}config${r}
+  Prints the full path to ${c6}$DOTCONF${r} and its contents
+
+  Plain file. One path per line. ${c7}#${r} comments
+  Every entry must start with ${C2}home/${r} or ${C2}root/${r}
+  No ${c1}~${r}, no absolute ${c1}/${r} forms, no ${c1}\$VAR${r} expansion
+  Prefer explicit files over whole dirs
+
+EOF
+}
+
+function help::sample {
+  local -a samples=()
+  mapfile -t samples <<'EOF'
+# shell / editor
+home/.zshrc
+home/.config/nvim
+home/.config/tmux/tmux.conf
+
+# git / ssh
+home/.gitconfig
+home/.ssh/config
+
+# prefer files over whole dirs
+home/.config/foo/config.toml
+home/.config/foo/themes
+
+# system
+root/etc/hosts
+root/etc/sysctl.d
+EOF
+  view::config "$DOTCONF" "${samples[@]}"
+}
+
+function help::syntax {
+  cat <<EOF
+${c2}   home/.zshrc${r}       is  ${c3}\$HOME/.zshrc${r}
+${c2}   root/etc/hosts${r}    is  ${c3}/etc/hosts${r}
+EOF
+  ui::divider c8 -
+}
+
+function help::howto {
+  help::config
+  help::sample
+  help::syntax
+}
+
+function help::layout {
+  cat <<EOF
+${C3}WHERE${r}
+${c2}  config${r} / ${c2}check${r} / ${c2}backup${r} / ${c2}restore${r} run inside ${it}your${r} state dir
+${it}  (the dir that holds ${c6}$DOTCONF)${r}
+${it}  No fixed path or name. Any dir, any git remote, you choose${r}
+
+    ${c2}repo/${r}
+    ${c6}├── ${c3}$DOTCONF${r}
+    ${c6}├── home/${r}
+    ${c6}└── root/${r}
+EOF
+  ui::divider c8 -
+}
+
+function help::backup {
+  cat <<EOF
+${C3}BACKUP${r}
+${C2}  $NAME ${c2}backup${r}
+  Reads ${c6}$DOTCONF${r}. Copies each listed path from the live system
+  into this repo (${c6}home/${r} and ${c6}root/${r}). Asks before writing
+  ${it}${c3}Dotkeep does not commit.${r} Git is yours after the copy
+
+  ${C6}workflow${r}
+    ${C60}# validate${r}
+    ${C2}$NAME check${r}
+    ${c60}# machine → repo${r}
+    ${C2}$NAME backup${r}
+    ${c60}# stage${r}
+    ${c2}git add -A${r}
+    ${c60}# snapshot${r}
+    ${c2}git commit -m snapshot${r}
+    ${c60}# publish${r}
+    ${c2}git push${r}
+EOF
+  ui::divider c8 -
+}
+
+function help::restore {
+  cat <<EOF
+${C3}RESTORE${r}
+  ${C2}$NAME ${c2}restore${r}
+  Reads ${c6}$DOTCONF${r}. Copies each listed path from this repo
+  (${c6}home/${r} and ${c6}root/${r}) onto the live system. Asks before writing
+  Existing live targets go to ${C2}/tmp/$NAME.XXXXXX/${r} first
+
+  ${C6}new machine${r}
+    ${c60}# clone your state repo${r}
+    ${c2}git clone${r} ${c7}<url>${r} ${c6}<state-dir>${r}
+    ${c60}# enter that clone${r}
+    ${C2}cd${r} ${c6}<state-dir>${r}
+    ${c60}# repo → machine${r}
+    ${C2}$NAME restore${r}
+
+  ${C6}existing clone${r}
+    ${c60}# enter your state dir${r}
+    ${C2}cd${r} ${c6}<state-dir>${r}
+    ${c60}# update from remote${r}
+    ${c2}git pull${r}
+    ${c60}# repo → machine${r}
+    ${C2}$NAME restore${r}
+EOF
+  ui::divider c8 -
+}
+
+function help::cmds {
+  cat <<EOF
+${C3}COMMANDS${r}
+  ${C2}$NAME ${c2}<command>${r}
+
+  ${c2}init${r} [DIR]   ${c6}home/${r} ${c6}root/${r} + empty ${c6}$DOTCONF${r} + ${c6}git init${r}
+  ${c2}config${r}       show ${c6}$DOTCONF${r} path + contents
+  ${c2}check${r}        validate + resolve paths
+  ${c2}backup${r}       copy live files into the repo
+  ${c2}restore${r}      copy repo files onto the live system
+  ${c2}help${r}
+EOF
+  ui::divider c8 -
+}
+
+function help::env {
+  cat <<EOF
+${C3}ENV${r}
+  ${C4}NO_COLOR${r}  disables color
+EOF
+}
+
+function help::main {
+  local skip=${1:-}
+  help::intro
+  help::init
+  help::howto
+  help::layout
+  [[ $skip == backup ]] || help::backup
+  [[ $skip == restore ]] || help::restore
+  help::cmds
+  help::env
+}
+
+function help::guide_init {
+  local dir=$1
+  help::howto
+  help::init
+  cat <<EOF
+
+${C3}NEXT${r}
+  1. edit ${c6}$DOTCONF${r}
+  2. run  ${C2}$NAME backup${r}
+EOF
+}
+
+function help::guide_empty {
+  help::howto
+  help::backup
+  cat <<EOF
+
+${C3}NEXT${r}
+  edit ${c6}$MANIFEST${r}  (one path per line, like the sample)
+  then ${C2}$NAME backup${r}
+EOF
+}
+
+function path::trim {
+  local s=${1%%#*}
+  s=${s#"${s%%[![:space:]]*}"}
+  printf '%s\n' "${s%"${s##*[![:space:]]}"}"
+}
+
+function path::norm {
   local IFS=/ p
   local -a out=()
   for p in $1; do
@@ -105,7 +369,7 @@ function norm {
   printf '%s\n' "${out[*]}"
 }
 
-function resolve {
+function path::resolve {
   case $1 in
   home/*) printf '%s/%s\n' "$HOME" "${1#home/}" ;;
   root/*) printf '/%s\n' "${1#root/}" ;;
@@ -113,40 +377,69 @@ function resolve {
   esac
 }
 
-function trim {
-  local s=${1%%#*}
-  s=${s#"${s%%[![:space:]]*}"}
-  printf '%s\n' "${s%"${s##*[![:space:]]}"}"
+function path::canon {
+  local n
+  [[ $1 != *['$~']* ]] || ui::die "forbidden char in: $1"
+  n=$(path::norm "$1") || ui::die "invalid path: $1"
+  printf '%s\n' "$n"
 }
 
-function read_entries {
-  [[ -f $MANIFEST ]] || die "missing manifest at $MANIFEST"
+# keep parents, drop children; order in manifest does not matter
+function path::overlap {
+  local -n _paths=$1
+  local -a s=() keep=()
+  ((${#_paths[@]} < 2)) && return 0
+  mapfile -t s < <(printf '%s\n' "${_paths[@]}" | sort)
+  local -A drop=()
+  local p parent=
+  for p in "${s[@]}"; do
+    [[ $parent && $p == "$parent"/* ]] && {
+      drop[$p]=$parent
+      continue
+    }
+    parent=$p
+  done
+  ((${#drop[@]})) || return 0
+  for p in "${_paths[@]}"; do
+    [[ -v drop[$p] ]] && {
+      ui::log warn drop "$p" "under ${drop[$p]}"
+      continue
+    }
+    keep+=("$p")
+  done
+  _paths=("${keep[@]}")
+}
+
+function path::clash {
+  [[ -e $1 && -e $2 ]] || return 1
+  [[ (-d $1 && -f $2) || (-f $1 && -d $2) ]]
+}
+
+# conf  (discover first: dispatch entry)
+function conf::discover {
+  local f=$PWD/$DOTCONF
+  [[ -f $f ]] || {
+    case $cmd in
+    backup) help::main restore ;;
+    restore) help::main backup ;;
+    *) help::main ;;
+    esac
+    ui::fatal "no ./$DOTCONF" "$NAME init"
+  }
+  MANIFEST=$f
+  ROOT=$(dirname "$f")
+}
+
+function conf::read {
+  [[ -f $MANIFEST ]] || ui::die "missing manifest at $MANIFEST"
   local line
   while IFS= read -r line || [[ $line ]]; do
-    line=$(trim "$line")
+    line=$(path::trim "$line")
     [[ $line ]] && printf '%s\n' "$line"
   done <"$MANIFEST"
 }
 
-function reject_overlap {
-  local -n _paths=$1
-  local -a s=()
-  ((${#_paths[@]} < 2)) && return 0
-  mapfile -t s < <(printf '%s\n' "${_paths[@]}" | sort)
-  local i
-  for ((i = 1; i < ${#s[@]}; i++)); do
-    [[ ${s[i]} != "${s[i - 1]}"/* ]] || die "overlap: ${s[i - 1]} contains ${s[i]}"
-  done
-}
-
-function canon {
-  local n
-  [[ $1 != *['$~']* ]] || die "forbidden char in: $1"
-  n=$(norm "$1") || die "invalid path: $1"
-  printf '%s\n' "$n"
-}
-
-function parse {
+function conf::parse {
   local dest=$1
   local -n _out=$1
   local raw n
@@ -154,38 +447,112 @@ function parse {
   _out=()
   shift
   for raw; do
-    n=$(canon "$raw")
-    [[ -v seen[$n] ]] && die "duplicate: $n"
+    n=$(path::canon "$raw")
+    [[ -v seen[$n] ]] && ui::die "duplicate: $n"
     seen[$n]=1
     _out+=("$n")
   done
-  reject_overlap "$dest"
+  path::overlap "$dest"
 }
 
-function load_valid {
-  local -a raws=()
-  mapfile -t raws < <(read_entries)
-  parse "$1" "${raws[@]}"
-}
-
-function entries {
-  load_valid "$1"
+function conf::entries {
   local -n _e=$1
-  ((${#_e[@]})) || die "manifest is empty"
+  local -a raws=()
+  mapfile -t raws < <(conf::read)
+  conf::parse "$1" "${raws[@]}"
+  ((${#_e[@]})) || {
+    help::guide_empty
+    ui::fatal "manifest is empty" "edit $MANIFEST  then  $NAME backup"
+  }
 }
 
-function pairs {
+function conf::pairs {
   local e
-  for e; do printf '%s\t%s\t%s\n' "$e" "$(resolve "$e")" "$ROOT/$e"; done
+  for e; do printf '%s\t%s\t%s\n' "$e" "$(path::resolve "$e")" "$ROOT/$e"; done
 }
 
-function clash {
-  [[ -e $1 && -e $2 ]] || return 1
-  [[ (-d $1 && -f $2) || (-f $1 && -d $2) ]]
+# sync  (order ≈ sync::run call chain)
+function sync::ends {
+  local side=$1 e=$2 fs=$3 repo=$4
+  local -n _src=$5 _dst=$6 _from=$7 _to=$8
+  case $side in
+  backup)
+    _src=$fs
+    _dst=$repo
+    _from=$fs
+    _to=repo/$e
+    ;;
+  restore)
+    _src=$repo
+    _dst=$fs
+    _from=repo/$e
+    _to=$fs
+    ;;
+  esac
 }
 
-# sync SRC DST. directory or file; true sync with --delete
-function sync_path {
+# sync::skip SRC SIDE WHY_NAMEREF — 0 = skip (sets why), 1 = usable
+function sync::skip {
+  local src=$1 side=$2
+  local -n _why=$3
+  [[ -L $src ]] && {
+    _why=symlink
+    return 0
+  }
+  [[ -e $src ]] && return 1
+  case $side in
+  backup) _why='not on machine' ;;
+  restore) _why='not in repo' ;;
+  esac
+  return 0
+}
+
+function sync::preview {
+  local side=$1
+  shift
+  local e fs repo src dst from to why n=0
+  case $side in
+  backup) ui::log step backup "machine → repo ${c3}($# paths)" ;;
+  restore)
+    ui::log step restore "repo → machine ${c3}($# paths)"
+    ui::log info 'saving backups' 'in' "${c3}/tmp/$NAME.XXXXXX/"
+    ;;
+  esac
+  ui::nl
+  while IFS=$'\t' read -r e fs repo; do
+    sync::ends "$side" "$e" "$fs" "$repo" src dst from to
+    why=
+    sync::skip "$src" "$side" why && {
+      ui::log warn ' skip' "${c1}$why" "${c3}$from"
+      continue
+    }
+    ((++n))
+    case $side in
+    backup) ui::log path '' "$from" ;;
+    restore) ui::log info '' "$to" ;;
+    esac
+  done < <(conf::pairs "$@")
+  ui::nl
+  ((n)) || ui::fatal "no valid sources" "fix $MANIFEST or create the missing paths"
+}
+
+function ask::tty { [[ -t 0 || -r /dev/tty ]] || echo FAIL; }
+
+function ask::yn {
+  local ans='' tty
+  ask::tty
+  exec {tty}<>/dev/tty
+  printf '%s%s%s %s[y/N]%s ' "$c3" "$1" "$r" "$C2" "$r" >&"$tty"
+  IFS= read -r -n 1 -u "$tty" ans || true
+  printf '\n' >&"$tty"
+  exec {tty}>&-
+  case $ans in
+  [yY]) return 0 ;;
+  esac
+  return 1
+}
+
+function sync::path {
   local src=$1 dst=$2
   mkdir -p "$(dirname "$dst")"
   [[ -d $src ]] && {
@@ -196,170 +563,159 @@ function sync_path {
   "${RSYNC[@]}" "$src" "$dst"
 }
 
-function sample_box {
-  local f line shown pad i top='' bot='' W=0
-  local -a samples=()
-  f=$HERE/dotkeep.conf.sample
-  [[ -f $f ]] || return 0
-  mapfile -t samples <"$f"
-  for line in "${samples[@]}" "$DOTCONF"; do
-    ((${#line} > W)) && W=${#line}
-  done
-  ((W += 2))
-  for ((i = 0; i < W - 1 - ${#DOTCONF}; i++)); do top+=─; done
-  for ((i = 0; i < W + 2; i++)); do bot+=─; done
-  printf '  %s╭─ %s%s%s %s╮%s\n' "$c7" "$C1" "$DOTCONF" "$c7" "$top" "$r"
-  for line in "${samples[@]}"; do
-    shown=$line
-    case $line in
-    home/*) shown="${C2}home${c6}/${line#home/}${c7}" ;;
-    root/*) shown="${C2}root${c6}/${line#root/}${c7}" ;;
-    '#'*) shown="${c7}${line}${c7}" ;;
-    esac
-    pad=$(printf '%*s' $((W - ${#line})) '')
-    printf '  %s│ %s%s │%s\n' "$c7" "$shown" "$pad" "$r"
-  done
-  printf '  %s╰%s╯%s\n' "$c7" "$bot" "$r"
-}
-
-function cmd_help {
-  cat <<EOF
-${C4}dotkeep${r}
-  ${c7}Sync the paths you list between machine and git${r}
-
-  Config owns inventory. Git owns history. The tool only syncs.
-
-${C3}CONFIG${r}
-  ${C2}home/.zshrc${r}       is  ${c2}\$HOME/.zshrc${r}
-  ${C2}root/etc/hosts${r}    is  ${c2}/etc/hosts${r}
-  Same path in the repo.
-
-  Plain file. One path per line. ${c7}#${r} comments.
-  Every entry must start with ${C2}home/${r} or ${C2}root/${r}.
-  No ${c1}~${r}, no absolute ${c1}/${r} forms, no ${c1}\$VAR${r} expansion.
-  Prefer explicit files over whole dirs when the tree holds cache/state.
-
-EOF
-  sample_box
-  cat <<EOF
-
-  ${c7}repo/${r}
-  ${c7}├── $DOTCONF${r}
-  ${c6}├── home/${r}
-  ${c6}└── root/${r}
-
-  Discovery, first hit wins. Repo = directory of the config file.
-    ${C2}1.${r} ${c7}./$DOTCONF${r}
-    ${C2}2.${r} ${c7}~/.$NAME/$DOTCONF${r}
-    ${C2}3.${r} ${c7}~/.config/$NAME/$XDGCONF${r}
-
-${C3}WORKFLOW${r}
-  ${C2}init${r} → edit ${c6}$DOTCONF${r} → ${C2}check${r} → ${C2}backup${r} → git
-  New machine: ${C2}restore${r}
-  Restore copies existing targets to ${C2}/tmp/$NAME.XXXXXX/${r} first.
-
-${C3}COMMANDS${r}
-  ${C4}dotkeep${r} ${c6}<command>${r} [args]
-  ${C2}init${r} [DIR]      ${c6}home/${r} ${c6}root/${r} + empty ${c6}$DOTCONF${r}
-  ${C2}check${r}           validate + resolve paths
-  ${C2}backup${r}          machine → repo
-  ${C2}restore${r}         repo → machine (${c7}/tmp safety copy first${r})
-  ${C2}help${r}
-
-${C3}ENV${r}
-  ${C4}DOTKEEP_ROOT${r}  skips discovery
-  ${C4}NO_COLOR${r}      disables color
-EOF
-}
-
-function cmd_init {
-  local dir=${1:-.} conf=$DOTCONF
-  dir=${dir%/}
-  [[ $dir == */.config/$NAME ]] && conf=$XDGCONF
-  mkdir -p "$dir/home" "$dir/root"
-  [[ -e $dir/$conf ]] || : >"$dir/$conf"
-  log ok init "$dir" "$dir/$conf"
-}
-
-function cmd_check {
-  local es=() e fs repo err=0
-  entries es
+function sync::safety {
+  ui::nl
+  local -n _paths=$1 _bak=$2 _n=$3
+  local e fs repo
+  _bak=$(mktemp -d /tmp/"$NAME".XXXXXX)
+  _n=0
+  ui::log step backup "$_bak"
   while IFS=$'\t' read -r e fs repo; do
-    log step entry "$e"
-    log info fs "$fs"
-    log info repo "$repo"
+    [[ -L $fs || ! -e $fs ]] && continue
+    path::clash "$fs" "$repo" && ui::die "type mismatch: $e"
+    sync::path "$fs" "$_bak/$e"
+    ui::log info bak "$_bak/$e"
+    ((++_n))
+  done < <(conf::pairs "${_paths[@]}")
+  ((_n)) && ui::log ok backup "$_n paths" "$_bak"
+  ((_n)) || ui::log warn safety "nothing on machine to bak"
+  ui::nl
+}
+
+function sync::one {
+  local side=$1 e=$2 fs=$3 repo=$4 src=$5 dst=$6 from=$7 to=$8
+  path::clash "$fs" "$repo" && ui::die "type mismatch: $e"
+  sync::path "$src" "$dst"
+  case $side in
+  backup) ui::log path '' "${c6}$from" ;;
+  restore) ui::log info '' "${c2}$to" ;;
+  esac
+}
+
+function sync::git {
+  [[ -d .git ]] || return 0
+  printf '\n'
+  git -c color.status=always status -sb
+  git rev-parse --verify HEAD >/dev/null 2>&1 || return 0
+  printf '\n'
+  git -c color.ui=always log --oneline --decorate -5
+}
+
+function sync::run {
+  local side=$1
+  local -n _es=$2
+  local e fs repo src dst from to bak='' n=0 why
+
+  "help::$side"
+  ui::nl
+  view::manifest
+  sync::preview "$side" "${_es[@]}"
+
+  ask::yn " are you sure?" || ui::die "aborted"
+
+  [[ $side != restore ]] || sync::safety "$2" bak n
+
+  while IFS=$'\t' read -r e fs repo; do
+    sync::ends "$side" "$e" "$fs" "$repo" src dst from to
+    why=
+    sync::skip "$src" "$side" why && continue
+    sync::one "$side" "$e" "$fs" "$repo" "$src" "$dst" "$from" "$to"
+  done < <(conf::pairs "${_es[@]}")
+
+  ui::log ok "${side} done"
+  ui::nl
+  [[ $side != backup ]] || sync::git
+  ui::nl
+  if [[ $side == restore && n -gt 0 ]]; then
+    ui::log info prior "$bak"
+  fi
+}
+
+# cmd
+function cmd::init {
+  local dir=${1:-.}
+  dir=${dir%/}
+  mkdir -p "$dir/home" "$dir/root"
+  [[ -e $dir/$DOTCONF ]] || : >"$dir/$DOTCONF"
+  [[ -d $dir/.git ]] || git -C "$dir" init -q
+  ui::log ok init "$dir" "$dir/$DOTCONF"
+  printf '\n'
+  tree -aC -I '.git' -L 6 --noreport "$dir"
+  printf '\n'
+  help::guide_init "$dir"
+}
+
+function cmd::config {
+  local f=$PWD/$DOTCONF
+  [[ -f $f ]] || {
+    help::main
+    return
+  }
+  MANIFEST=$f
+  help::config
+  view::manifest "$f"
+  help::syntax
+  help::cmds
+}
+
+function cmd::check {
+  local es=() e fs repo err=0
+  local processed=0
+  conf::entries es
+  while IFS=$'\t' read -r e fs repo; do
+    ui::log step path "${c2}$fs"
+    ui::log info keep "${c33}$e"
+    [[ -L $fs ]] && {
+      ui::log warn skip symlink
+      continue
+    }
     [[ -e $fs ]] || {
-      log err miss "missing on machine"
-      err=1
+      ui::log warn miss "${C3}missing on machine"
       continue
     }
     [[ -e $repo ]] || {
-      log warn miss "missing in repo"
+      ui::log warn miss "${C3}missing in repo"
       continue
     }
-    clash "$fs" "$repo" || continue
-    log err type "type mismatch"
+    path::clash "$fs" "$repo" || continue
+    ui::log err type "type mismatch"
     err=1
-  done < <(pairs "${es[@]}")
-  ((err == 0)) || die "check failed"
-  log ok check "${#es[@]} entries"
+  done < <(conf::pairs "${es[@]}")
+  ((err == 0)) || ui::die "check failed"
+  ui::divider c4 ━
+  ui::log ok check "${c6}${#es[@]} entries${r}"
 }
 
-function cmd_backup {
-  local es=() e fs repo
-  entries es
-  log step backup "machine → repo (${#es[@]} paths)"
-  while IFS=$'\t' read -r e fs repo; do
-    [[ -e $fs ]] || die "missing on machine: $fs"
-    clash "$fs" "$repo" && die "type mismatch: $e"
-    sync_path "$fs" "$repo"
-    log ok sync "$fs" "$repo"
-  done < <(pairs "${es[@]}")
-  log ok 'backup done'
-}
-
-function cmd_restore {
-  local es=() e fs repo bak n=0
-  entries es
-  bak=$(mktemp -d /tmp/dotkeep.XXXXXX)
-  log step safety "$bak"
-  while IFS=$'\t' read -r e fs repo; do
-    [[ -e $repo ]] || die "missing in repo: $repo"
-    [[ -e $fs ]] || continue
-    clash "$fs" "$repo" && die "type mismatch: $e"
-    sync_path "$fs" "$bak/$e"
-    log info save "$fs" "$bak/$e"
-    ((++n))
-  done < <(pairs "${es[@]}")
-  ((n)) && log ok safety "$n paths" "$bak"
-  ((n)) || log warn safety "nothing on machine to save"
-
-  log step restore "repo → machine (${#es[@]} paths)"
-  while IFS=$'\t' read -r e fs repo; do
-    sync_path "$repo" "$fs"
-    log ok sync "$repo" "$fs"
-  done < <(pairs "${es[@]}")
-  log ok 'restore done'
-  ((n)) && log info undo "$bak"
+function cmd::sync {
+  local es=()
+  conf::entries es
+  sync::run "$1" es
 }
 
 cmd=${1:-help}
 shift || true
 case $cmd in
 help | -h | --help)
-  cmd_help
+  help::main
   exit
   ;;
 init)
-  cmd_init "$@"
+  cmd::init "$@"
+  exit
+  ;;
+config)
+  cmd::config
   exit
   ;;
 check | backup | restore) ;;
-*) die "unknown command: $cmd (try: $NAME help)" ;;
+*) ui::die "unknown command: $cmd (try: $NAME help)" ;;
 esac
-discover
+conf::discover
 cfg=$(basename "$MANIFEST")
 cd "$ROOT"
 ROOT=.
 MANIFEST=./$cfg
-"cmd_$cmd" "$@"
+case $cmd in
+check) cmd::check "$@" ;;
+*) cmd::sync "$cmd" "$@" ;;
+esac
