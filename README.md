@@ -1,10 +1,31 @@
 <div align="center">
   <img src=".github/assets/logo.jpg" alt="dotkeep" width="80%">
   <br>
-  <h2>dotkeep</h2>
+  <h1>dotkeep</h1>
   <h4>Dotfiles, kept simple</h4>
   <p>A single plain-text manifest for syncing configuration with Git</p>
 </div>
+
+<p align="center">
+  <a href="#install">Install</a> ·
+  <a href="#init">Init</a> ·
+  <a href="#config">Config</a> ·
+  <a href="#backup">Backup</a> ·
+  <a href="#restore">Restore</a> ·
+  <a href="#commands">Commands</a>
+</p>
+
+<div align="center">
+  <video
+    src=".github/assets/help.webm"
+    autoplay
+    loop
+    muted
+    playsinline
+  ></video>
+</div>
+
+---
 
 ## Install
 
@@ -58,7 +79,7 @@ Shows the full path to `.dotkeep.conf` and its contents
 > Prefer explicit files over whole dirs
 > If both a dir and paths under it are listed, the dir wins and children are dropped
 
-> [IMPORTANT]
+> [!IMPORTANT]
 >
 > Symlinks are skipped (leaf and nested). Devices, fifos, and sockets are not synced
 > Nested `.git` directories are stripped (content only, not repo metadata)
@@ -112,6 +133,8 @@ dotkeep backup
 Reads `.dotkeep.conf`. Copies each listed path from the live system
 into this repo (`home/` and `root/`). Asks before writing
 
+> [!NOTE]
+>
 > Ignored paths under `home/` / `root/` are pruned via `git clean -X`
 > Next: `git add` / `commit` yourself. Dotkeep does not commit
 

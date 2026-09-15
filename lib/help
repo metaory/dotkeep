@@ -16,7 +16,7 @@ ${C2}  $NAME init${r} [DIR]
   Creates ${c6}home/${r} ${c6}root/${r} + empty ${c6}$DOTCONF${r} + ${c6}.gitignore${r} + ${c6}git init${r}
 
 ${it}  Or skip init: mkdir a dir and write ${c6}$DOTCONF${r} yourself${r}
-${it}  Next: ${C2}cd${r} into that dir, edit ${c6}$DOTCONF${r}, then ${c2}$NAME backup${r}
+${it}  Next: ${C2}cd${r} to that dir, edit ${c6}$DOTCONF${r}, then ${c2}$NAME backup${r}
 EOF
   ui::divider c8 -
 }
@@ -31,7 +31,7 @@ ${C2}  $NAME ${c2}config${r}
   Every entry must start with ${C2}home/${r} or ${C2}root/${r}
   No ${c1}~${r}, no absolute ${c1}/${r} forms, no ${c1}\$VAR${r} expansion
   Prefer explicit files over whole dirs
-  Symlinks skipped. Nested ${c6}.git/${r} stripped. ${c6}.gitignore${r} controls dir excludes
+  Symlinks and Nested ${c6}.git/${r} stripped. ${c6}.gitignore${r} is respected
 
 EOF
 }
@@ -127,7 +127,7 @@ function help::cmds {
 ${C3}COMMANDS${r}
   ${C2}$NAME ${c2}<command>${r}
 
-  ${c2}init${r} [DIR]   ${c6}home/${r} ${c6}root/${r} + empty ${c6}$DOTCONF${r} + ${c6}.gitignore${r} + ${c6}git init${r}
+  ${c2}init${r} [DIR]   ${c6}home/ root/${r} + ${c6}$DOTCONF${r} + ${c6}git setup${r}
   ${c2}config${r}       show ${c6}$DOTCONF${r} path + contents
   ${c2}check${r}        validate + resolve paths
   ${c2}backup${r}       copy live files into the repo
