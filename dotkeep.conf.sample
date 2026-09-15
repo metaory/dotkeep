@@ -3,14 +3,14 @@ home/.zshrc
 home/.config/nvim
 home/.config/tmux/tmux.conf
 
-# git / ssh
+# git / terminal
 home/.gitconfig
-home/.ssh/config
+home/.config/starship.toml
+home/.config/alacritty/alacritty.toml
 
 # prefer files over whole dirs
 home/.config/foo/config.toml
 home/.config/foo/themes
 
-# system
+# optional system paths
 root/etc/hosts
-root/etc/sysctl.d

@@ -1,0 +1,177 @@
+# shellcheck shell=bash disable=SC2154
+
+function help::intro {
+  cat <<EOF
+${C6} dotkeep ${c7}// ${c2}dotfiles, kept simple${r}
+
+${it}${c7}  A single plain-text manifest for syncing configuration with Git${r}
+EOF
+  ui::divider c8 ─
+}
+
+function help::init {
+  cat <<EOF
+${C3}INIT${r}
+${C2}  $NAME init${r} [DIR]
+  Creates ${c6}home/${r} ${c6}root/${r} + empty ${c6}$DOTCONF${r} + ${c6}.gitignore${r} + ${c6}git init${r}
+
+${it}  Or skip init: mkdir a dir and write ${c6}$DOTCONF${r} yourself${r}
+${it}  Next: ${C2}cd${r} into that dir, edit ${c6}$DOTCONF${r}, then ${c2}$NAME backup${r}
+EOF
+  ui::divider c8 -
+}
+
+function help::config {
+  cat <<EOF
+${C3}CONFIG${r}
+${C2}  $NAME ${c2}config${r}
+  Prints the full path to ${c6}$DOTCONF${r} and its contents
+
+  Plain file. One path per line. ${c7}#${r} comments
+  Every entry must start with ${C2}home/${r} or ${C2}root/${r}
+  No ${c1}~${r}, no absolute ${c1}/${r} forms, no ${c1}\$VAR${r} expansion
+  Prefer explicit files over whole dirs
+  Symlinks skipped. Nested ${c6}.git/${r} stripped. ${c6}.gitignore${r} controls dir excludes
+
+EOF
+}
+
+function help::sample {
+  local -a samples=()
+  mapfile -t samples <"${SCRIPT%/*}/dotkeep.conf.sample"
+  view::config "$DOTCONF" "${samples[@]}"
+}
+
+function help::syntax {
+  cat <<EOF
+${c2}   home/.zshrc${r}       is  ${c3}\$HOME/.zshrc${r}
+${c2}   root/etc/hosts${r}    is  ${c3}/etc/hosts${r}
+EOF
+  ui::divider c8 -
+}
+
+function help::howto {
+  help::config
+  help::sample
+  help::syntax
+}
+
+function help::layout {
+  cat <<EOF
+${C3}WHERE${r}
+${c2}  config${r} / ${c2}check${r} / ${c2}backup${r} / ${c2}restore${r} run inside ${it}your${r} state dir
+${it}  (the dir that holds ${c6}$DOTCONF)${r}
+${it}  No fixed path or name. Any dir, any git remote, you choose${r}
+
+    ${c2}repo/${r}
+    ${c6}├── ${c3}$DOTCONF${r}
+    ${c6}├── ${c3}.gitignore${r}
+    ${c6}├── home/${r}
+    ${c6}└── root/${r}
+EOF
+  ui::divider c8 -
+}
+
+function help::backup {
+  cat <<EOF
+${C3}BACKUP${r}
+${C2}  $NAME ${c2}backup${r}
+  Reads ${c6}$DOTCONF${r}. Copies each listed path from the live system
+  into this repo (${c6}home/${r} and ${c6}root/${r}). Asks before writing
+  ${it}${c3}Dotkeep does not commit.${r} Git is yours after the copy
+
+  ${C6}workflow${r}
+    ${C60}# validate${r}
+    ${C2}$NAME check${r}
+    ${c60}# machine → repo${r}
+    ${C2}$NAME backup${r}
+    ${c60}# stage${r}
+    ${c2}git add -A${r}
+    ${c60}# snapshot${r}
+    ${c2}git commit -m snapshot${r}
+    ${c60}# publish${r}
+    ${c2}git push${r}
+EOF
+  ui::divider c8 -
+}
+
+function help::restore {
+  cat <<EOF
+${C3}RESTORE${r}
+  ${C2}$NAME ${c2}restore${r}
+  Reads ${c6}$DOTCONF${r}. Copies each listed path from this repo
+  (${c6}home/${r} and ${c6}root/${r}) onto the live system. Asks before writing
+  Existing live targets go to ${C2}/tmp/$NAME.XXXXXX/${r} first
+
+  ${C6}new machine${r}
+    ${c60}# clone your state repo${r}
+    ${c2}git clone${r} ${c7}<url>${r} ${c6}<state-dir>${r}
+    ${c60}# enter that clone${r}
+    ${C2}cd${r} ${c6}<state-dir>${r}
+    ${c60}# repo → machine${r}
+    ${C2}$NAME restore${r}
+
+  ${C6}existing clone${r}
+    ${c60}# enter your state dir${r}
+    ${C2}cd${r} ${c6}<state-dir>${r}
+    ${c60}# update from remote${r}
+    ${c2}git pull${r}
+    ${c60}# repo → machine${r}
+    ${C2}$NAME restore${r}
+EOF
+  ui::divider c8 -
+}
+
+function help::cmds {
+  cat <<EOF
+${C3}COMMANDS${r}
+  ${C2}$NAME ${c2}<command>${r}
+
+  ${c2}init${r} [DIR]   ${c6}home/${r} ${c6}root/${r} + empty ${c6}$DOTCONF${r} + ${c6}.gitignore${r} + ${c6}git init${r}
+  ${c2}config${r}       show ${c6}$DOTCONF${r} path + contents
+  ${c2}check${r}        validate + resolve paths
+  ${c2}backup${r}       copy live files into the repo
+  ${c2}restore${r}      copy repo files onto the live system
+  ${c2}help${r}
+EOF
+  ui::divider c8 -
+}
+
+function help::env {
+  cat <<EOF
+${C3}ENV${r}
+  ${C4}NO_COLOR${r}  disables color
+EOF
+}
+
+function help::next {
+  cat <<EOF
+${C3}NEXT${r}
+  1. edit ${c6}$DOTCONF${r}
+  2. run  ${C2}$NAME backup${r}
+EOF
+}
+
+function help::guide_init {
+  help::howto
+  help::init
+}
+
+function help::guide_empty {
+  help::howto
+  help::backup
+  help::next
+}
+
+function help::main {
+  help::intro
+  help::init
+  help::howto
+  help::layout
+  help::backup
+  help::restore
+  help::cmds
+  help::env
+}
+
+# vim: ft=bash

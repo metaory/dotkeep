@@ -6,7 +6,38 @@ NAME=dotkeep
 DOTCONF=.$NAME.conf
 ROOT=
 MANIFEST=
-RSYNC=(rsync -a --delete --no-owner --no-group)
+RSYNC=(rsync -rptgo --delete --no-owner --no-group --exclude=.git)
+
+for bin in basename cat dirname git mkdir mktemp readlink rsync sed sort tput tree; do
+  command -v "$bin" >/dev/null && continue
+  printf '%s: missing command: %s\n' "$NAME" "$bin" >&2
+  exit 1
+done
+
+SCRIPT=$(readlink -f "${BASH_SOURCE[0]}")
+readonly LIB=${SCRIPT%/*}/lib
+
+[[ -r $LIB/help ]] || {
+  printf '%s\n' "$NAME: incomplete installation: $LIB/help" >&2
+  exit 1
+}
+
+# shellcheck source=lib/help
+source "$LIB/help"
+
+# type → "prefix colorVar"
+declare -A LOG=(
+  [ok]='⇒ C2'
+  [info]=':> c33'
+  [warn]='!! C3'
+  [err]='✗✗ C1'
+  [step]='=> C6'
+  [path]='·> C2'
+)
+
+#  ┏━
+#  ┃ UI
+#  ┗━╸━╺╸━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╸━╺╸━╺
 
 function ui::nl { printf '\n'; }
 
@@ -14,7 +45,6 @@ function ui::palette {
   local i
   r=
   it=
-  b=
   for i in {0..255}; do
     printf -v "c$i" ''
     printf -v "C$i" ''
@@ -26,21 +56,9 @@ function ui::palette {
   done
   r=$'\033[0m'
   it=$'\033[3m'
-  b=$'\033[1m'
 }
 ui::palette
-
 readonly border_color=$c8
-
-# type → "prefix colorVar"
-declare -A LOG=(
-  [ok]='⇒ C2'
-  [info]=':> c33'
-  [warn]='!! C3'
-  [err]='✗✗ C1'
-  [step]='=> C6'
-  [path]='·> C2'
-)
 
 # ui::log TYPE TITLE [DETAIL...]
 # DETAIL parts join with →
@@ -97,8 +115,6 @@ function ui::error {
   ui::fatal "command failed ($code): $cmd" "line $line"
 }
 
-trap 'ui::error "$?" "$LINENO" "$BASH_COMMAND"' ERR
-
 function ui::paint {
   local line=${1%$'\r'}
   line=${line#"${line%%[![:space:]]*}"}
@@ -111,6 +127,10 @@ function ui::paint {
   *) printf '%s%s' "$c7" "$line$border_color" ;;
   esac
 }
+
+#  ┏━
+#  ┃ VIEW
+#  ┗━╸━╺╸━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╸━╺╸━╺
 
 # view::config TITLE LINE... — box render (help sample, config, backup/restore)
 function view::config {
@@ -150,199 +170,9 @@ function view::manifest {
   view::config "$title" "${lines[@]}"
 }
 
-function help::intro {
-  cat <<EOF
-${C6} dotkeep ${c7}// ${c2}dotfiles, kept simple${r}
-
-${it}${c7}  A single plain-text manifest for syncing configuration with Git${r}
-EOF
-  ui::divider c8 ─
-}
-
-function help::init {
-  cat <<EOF
-${C3}INIT${r}
-${C2}  $NAME init${r} [DIR]
-  Creates ${c6}home/${r} ${c6}root/${r} + empty ${c6}$DOTCONF${r} + ${c6}git init${r}
-
-${it}  Or skip init: mkdir a dir and write ${c6}$DOTCONF${r} yourself${r}
-${it}  Next: ${C2}cd${r} into that dir, edit ${c6}$DOTCONF${r}, then ${c2}$NAME backup${r}
-EOF
-  ui::divider c8 -
-}
-
-function help::config {
-  cat <<EOF
-${C3}CONFIG${r}
-${C2}  $NAME ${c2}config${r}
-  Prints the full path to ${c6}$DOTCONF${r} and its contents
-
-  Plain file. One path per line. ${c7}#${r} comments
-  Every entry must start with ${C2}home/${r} or ${C2}root/${r}
-  No ${c1}~${r}, no absolute ${c1}/${r} forms, no ${c1}\$VAR${r} expansion
-  Prefer explicit files over whole dirs
-
-EOF
-}
-
-function help::sample {
-  local -a samples=()
-  mapfile -t samples <<'EOF'
-# shell / editor
-home/.zshrc
-home/.config/nvim
-home/.config/tmux/tmux.conf
-
-# git / ssh
-home/.gitconfig
-home/.ssh/config
-
-# prefer files over whole dirs
-home/.config/foo/config.toml
-home/.config/foo/themes
-
-# system
-root/etc/hosts
-root/etc/sysctl.d
-EOF
-  view::config "$DOTCONF" "${samples[@]}"
-}
-
-function help::syntax {
-  cat <<EOF
-${c2}   home/.zshrc${r}       is  ${c3}\$HOME/.zshrc${r}
-${c2}   root/etc/hosts${r}    is  ${c3}/etc/hosts${r}
-EOF
-  ui::divider c8 -
-}
-
-function help::howto {
-  help::config
-  help::sample
-  help::syntax
-}
-
-function help::layout {
-  cat <<EOF
-${C3}WHERE${r}
-${c2}  config${r} / ${c2}check${r} / ${c2}backup${r} / ${c2}restore${r} run inside ${it}your${r} state dir
-${it}  (the dir that holds ${c6}$DOTCONF)${r}
-${it}  No fixed path or name. Any dir, any git remote, you choose${r}
-
-    ${c2}repo/${r}
-    ${c6}├── ${c3}$DOTCONF${r}
-    ${c6}├── home/${r}
-    ${c6}└── root/${r}
-EOF
-  ui::divider c8 -
-}
-
-function help::backup {
-  cat <<EOF
-${C3}BACKUP${r}
-${C2}  $NAME ${c2}backup${r}
-  Reads ${c6}$DOTCONF${r}. Copies each listed path from the live system
-  into this repo (${c6}home/${r} and ${c6}root/${r}). Asks before writing
-  ${it}${c3}Dotkeep does not commit.${r} Git is yours after the copy
-
-  ${C6}workflow${r}
-    ${C60}# validate${r}
-    ${C2}$NAME check${r}
-    ${c60}# machine → repo${r}
-    ${C2}$NAME backup${r}
-    ${c60}# stage${r}
-    ${c2}git add -A${r}
-    ${c60}# snapshot${r}
-    ${c2}git commit -m snapshot${r}
-    ${c60}# publish${r}
-    ${c2}git push${r}
-EOF
-  ui::divider c8 -
-}
-
-function help::restore {
-  cat <<EOF
-${C3}RESTORE${r}
-  ${C2}$NAME ${c2}restore${r}
-  Reads ${c6}$DOTCONF${r}. Copies each listed path from this repo
-  (${c6}home/${r} and ${c6}root/${r}) onto the live system. Asks before writing
-  Existing live targets go to ${C2}/tmp/$NAME.XXXXXX/${r} first
-
-  ${C6}new machine${r}
-    ${c60}# clone your state repo${r}
-    ${c2}git clone${r} ${c7}<url>${r} ${c6}<state-dir>${r}
-    ${c60}# enter that clone${r}
-    ${C2}cd${r} ${c6}<state-dir>${r}
-    ${c60}# repo → machine${r}
-    ${C2}$NAME restore${r}
-
-  ${C6}existing clone${r}
-    ${c60}# enter your state dir${r}
-    ${C2}cd${r} ${c6}<state-dir>${r}
-    ${c60}# update from remote${r}
-    ${c2}git pull${r}
-    ${c60}# repo → machine${r}
-    ${C2}$NAME restore${r}
-EOF
-  ui::divider c8 -
-}
-
-function help::cmds {
-  cat <<EOF
-${C3}COMMANDS${r}
-  ${C2}$NAME ${c2}<command>${r}
-
-  ${c2}init${r} [DIR]   ${c6}home/${r} ${c6}root/${r} + empty ${c6}$DOTCONF${r} + ${c6}git init${r}
-  ${c2}config${r}       show ${c6}$DOTCONF${r} path + contents
-  ${c2}check${r}        validate + resolve paths
-  ${c2}backup${r}       copy live files into the repo
-  ${c2}restore${r}      copy repo files onto the live system
-  ${c2}help${r}
-EOF
-  ui::divider c8 -
-}
-
-function help::env {
-  cat <<EOF
-${C3}ENV${r}
-  ${C4}NO_COLOR${r}  disables color
-EOF
-}
-
-function help::main {
-  local skip=${1:-}
-  help::intro
-  help::init
-  help::howto
-  help::layout
-  [[ $skip == backup ]] || help::backup
-  [[ $skip == restore ]] || help::restore
-  help::cmds
-  help::env
-}
-
-function help::guide_init {
-  local dir=$1
-  help::howto
-  help::init
-  cat <<EOF
-
-${C3}NEXT${r}
-  1. edit ${c6}$DOTCONF${r}
-  2. run  ${C2}$NAME backup${r}
-EOF
-}
-
-function help::guide_empty {
-  help::howto
-  help::backup
-  cat <<EOF
-
-${C3}NEXT${r}
-  edit ${c6}$MANIFEST${r}  (one path per line, like the sample)
-  then ${C2}$NAME backup${r}
-EOF
-}
+#  ┏━
+#  ┃ PATH
+#  ┗━╸━╺╸━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╸━╺╸━╺
 
 function path::trim {
   local s=${1%%#*}
@@ -415,15 +245,14 @@ function path::clash {
   [[ (-d $1 && -f $2) || (-f $1 && -d $2) ]]
 }
 
-# conf  (discover first: dispatch entry)
+#  ┏━
+#  ┃ CONF
+#  ┗━╸━╺╸━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╸━╺╸━╺
+
 function conf::discover {
   local f=$PWD/$DOTCONF
   [[ -f $f ]] || {
-    case $cmd in
-    backup) help::main restore ;;
-    restore) help::main backup ;;
-    *) help::main ;;
-    esac
+    help::main
     ui::fatal "no ./$DOTCONF" "$NAME init"
   }
   MANIFEST=$f
@@ -470,6 +299,30 @@ function conf::pairs {
   local e
   for e; do printf '%s\t%s\t%s\n' "$e" "$(path::resolve "$e")" "$ROOT/$e"; done
 }
+
+#  ┏━
+#  ┃ ASK
+#  ┗━╸━╺╸━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╸━╺╸━╺
+
+function ask::tty { [[ -t 0 || -r /dev/tty ]] || echo FAIL; }
+
+function ask::yn {
+  local ans='' tty
+  ask::tty
+  exec {tty}<>/dev/tty
+  printf '%s%s%s %s[y/N]%s ' "$c3" "$1" "$r" "$C2" "$r" >&"$tty"
+  IFS= read -r -n 1 -u "$tty" ans || true
+  printf '\n' >&"$tty"
+  exec {tty}>&-
+  case $ans in
+  [yY]) return 0 ;;
+  esac
+  return 1
+}
+
+#  ┏━
+#  ┃ SYNC
+#  ┗━╸━╺╸━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╸━╺╸━╺
 
 # sync  (order ≈ sync::run call chain)
 function sync::ends {
@@ -536,22 +389,6 @@ function sync::preview {
   ((n)) || ui::fatal "no valid sources" "fix $MANIFEST or create the missing paths"
 }
 
-function ask::tty { [[ -t 0 || -r /dev/tty ]] || echo FAIL; }
-
-function ask::yn {
-  local ans='' tty
-  ask::tty
-  exec {tty}<>/dev/tty
-  printf '%s%s%s %s[y/N]%s ' "$c3" "$1" "$r" "$C2" "$r" >&"$tty"
-  IFS= read -r -n 1 -u "$tty" ans || true
-  printf '\n' >&"$tty"
-  exec {tty}>&-
-  case $ans in
-  [yY]) return 0 ;;
-  esac
-  return 1
-}
-
 function sync::path {
   local src=$1 dst=$2
   mkdir -p "$(dirname "$dst")"
@@ -565,7 +402,9 @@ function sync::path {
 
 function sync::safety {
   ui::nl
-  local -n _paths=$1 _bak=$2 _n=$3
+  local -n _safe=$1
+  local -n _bak=$2
+  local -n _n=$3
   local e fs repo
   _bak=$(mktemp -d /tmp/"$NAME".XXXXXX)
   _n=0
@@ -576,7 +415,7 @@ function sync::safety {
     sync::path "$fs" "$_bak/$e"
     ui::log info bak "$_bak/$e"
     ((++_n))
-  done < <(conf::pairs "${_paths[@]}")
+  done < <(conf::pairs "${_safe[@]}")
   ((_n)) && ui::log ok backup "$_n paths" "$_bak"
   ((_n)) || ui::log warn safety "nothing on machine to bak"
   ui::nl
@@ -590,6 +429,11 @@ function sync::one {
   backup) ui::log path '' "${c6}$from" ;;
   restore) ui::log info '' "${c2}$to" ;;
   esac
+}
+
+function sync::prune {
+  [[ -d .git ]] || return 0
+  git clean -Xdf -- home root
 }
 
 function sync::git {
@@ -614,6 +458,7 @@ function sync::run {
   ask::yn " are you sure?" || ui::die "aborted"
 
   [[ $side != restore ]] || sync::safety "$2" bak n
+  [[ $side != restore ]] || sync::prune
 
   while IFS=$'\t' read -r e fs repo; do
     sync::ends "$side" "$e" "$fs" "$repo" src dst from to
@@ -622,6 +467,7 @@ function sync::run {
     sync::one "$side" "$e" "$fs" "$repo" "$src" "$dst" "$from" "$to"
   done < <(conf::pairs "${_es[@]}")
 
+  [[ $side != backup ]] || sync::prune
   ui::log ok "${side} done"
   ui::nl
   [[ $side != backup ]] || sync::git
@@ -631,12 +477,16 @@ function sync::run {
   fi
 }
 
-# cmd
+#  ┏━
+#  ┃ CMD
+#  ┗━╸━╺╸━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╸━╺╸━╺
+
 function cmd::init {
   local dir=${1:-.}
   dir=${dir%/}
   mkdir -p "$dir/home" "$dir/root"
   [[ -e $dir/$DOTCONF ]] || : >"$dir/$DOTCONF"
+  [[ -e $dir/.gitignore ]] || cat "$LIB/gitignore" >"$dir/.gitignore"
   [[ -d $dir/.git ]] || git -C "$dir" init -q
   ui::log ok init "$dir" "$dir/$DOTCONF"
   printf '\n'
@@ -660,7 +510,6 @@ function cmd::config {
 
 function cmd::check {
   local es=() e fs repo err=0
-  local processed=0
   conf::entries es
   while IFS=$'\t' read -r e fs repo; do
     ui::log step path "${c2}$fs"
@@ -692,6 +541,12 @@ function cmd::sync {
   sync::run "$1" es
 }
 
+#  ┏━
+#  ┃ INIT
+#  ┗━╸━╺╸━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╸━╺╸━╺
+
+trap 'ui::error "$?" "$LINENO" "$BASH_COMMAND"' ERR
+
 cmd=${1:-help}
 shift || true
 case $cmd in
@@ -710,11 +565,15 @@ config)
 check | backup | restore) ;;
 *) ui::die "unknown command: $cmd (try: $NAME help)" ;;
 esac
+
 conf::discover
+
 cfg=$(basename "$MANIFEST")
+
 cd "$ROOT"
 ROOT=.
 MANIFEST=./$cfg
+
 case $cmd in
 check) cmd::check "$@" ;;
 *) cmd::sync "$cmd" "$@" ;;

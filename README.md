@@ -1,10 +1,25 @@
 <div align="center">
   <h1>dotkeep</h1>
-  <img src=".github/assets/logo.png" alt="dotkeep" width="80%">
+  <img src=".github/assets/logo.jpg" alt="dotkeep" width="80%">
   <h4>Dotfiles, kept simple</h4>
   <br>
   <p>A single plain-text manifest for syncing configuration with Git</p>
 </div>
+
+## Install
+
+Needs `bash`, `git`, `rsync`, `tree`, `tput`, `sed`, and GNU coreutils
+
+```sh
+git clone https://github.com/metaory/dotkeep
+cd dotkeep
+```
+
+Symlink `dotkeep` into any directory on your `PATH`:
+
+```sh
+ln -s "$(realpath dotkeep)" /path/on/PATH/dotkeep
+```
 
 ## Init
 
@@ -12,10 +27,12 @@
 dotkeep init [DIR]
 ```
 
-Creates `home/`, `root/`, empty `.dotkeep.conf`, and `git init`.
+Creates `home/`, `root/`, empty `.dotkeep.conf`, a default `.gitignore`, and `git init`
 
-> Or skip init: mkdir a dir and write `.dotkeep.conf` yourself.
-> Next: `cd` into that dir, edit `.dotkeep.conf`, then `dotkeep backup`.
+> [!TIP]
+>
+> Or skip init: mkdir a dir and write `.dotkeep.conf` yourself
+> Next: `cd` into that dir, edit `.dotkeep.conf`, then `dotkeep backup`
 
 ```sh
 dotkeep init ~/state
@@ -29,13 +46,23 @@ $EDITOR .dotkeep.conf
 dotkeep config
 ```
 
-Shows the full path to `.dotkeep.conf` and its contents.
+Shows the full path to `.dotkeep.conf` and its contents
 
-Plain file. One path per line. `#` comments.
-Every entry must start with `home/` or `root/`.
-No `~`, no absolute `/` forms, no `$VAR` expansion.
-Prefer explicit files over whole dirs.
-If both a dir and paths under it are listed, the dir wins and children are dropped.
+> [!NOTE]
+> Plain file. One path per line. `#` comments
+> Every entry must start with `home/` or `root/`
+
+> [!CAUTION]
+>
+> No `~`, no absolute `/` forms, no `$VAR` expansion
+> Prefer explicit files over whole dirs
+> If both a dir and paths under it are listed, the dir wins and children are dropped
+
+> [IMPORTANT]
+>
+> Symlinks are skipped (leaf and nested). Devices, fifos, and sockets are not synced
+> Nested `.git` directories are stripped (content only, not repo metadata)
+> Directory sync respects the state dir `.gitignore` (init seeds a Vite-style default)
 
 Copy [dotkeep.conf.sample](dotkeep.conf.sample) or start from `dotkeep init`:
 
@@ -45,17 +72,17 @@ home/.zshrc
 home/.config/nvim
 home/.config/tmux/tmux.conf
 
-# git / ssh
+# git / terminal
 home/.gitconfig
-home/.ssh/config
+home/.config/starship.toml
+home/.config/alacritty/alacritty.toml
 
 # prefer files over whole dirs
 home/.config/foo/config.toml
 home/.config/foo/themes
 
-# system
+# optional system paths
 root/etc/hosts
-root/etc/sysctl.d
 ```
 
 ```
@@ -65,13 +92,13 @@ root/etc/hosts    is  /etc/hosts
 
 ## Where
 
-`config` / `check` / `backup` / `restore` run inside *your* state dir
-(the dir that holds `.dotkeep.conf`).
-No fixed path or name. Any dir, any git remote, you choose.
+`config` / `check` / `backup` / `restore` run from the dir that holds
+`.dotkeep.conf`. No fixed path or name: pick any dir, any git remote
 
 ```
 repo/
 ├── .dotkeep.conf
+├── .gitignore
 ├── home/
 └── root/
 ```
@@ -83,8 +110,10 @@ dotkeep backup
 ```
 
 Reads `.dotkeep.conf`. Copies each listed path from the live system
-into this repo (`home/` and `root/`). Asks before writing.
-Next: `git add` / `commit` yourself. Dotkeep does not commit.
+into this repo (`home/` and `root/`). Asks before writing
+
+> Ignored paths under `home/` / `root/` are pruned via `git clean -X`
+> Next: `git add` / `commit` yourself. Dotkeep does not commit
 
 ```sh
 dotkeep check
@@ -101,10 +130,11 @@ dotkeep restore
 ```
 
 Reads `.dotkeep.conf`. Copies each listed path from this repo
-(`home/` and `root/`) onto the live system. Asks before writing.
-Existing live targets go to `/tmp/dotkeep.XXXXXX/` first.
+(`home/` and `root/`) onto the live system. Asks before writing
 
-New machine:
+> Existing live targets go to `/tmp/dotkeep.XXXXXX/` first
+
+### New machine:
 
 ```sh
 git clone <url> <state-dir>
@@ -112,7 +142,7 @@ cd <state-dir>
 dotkeep restore
 ```
 
-Existing clone:
+### Existing clone:
 
 ```sh
 cd <state-dir>
@@ -125,7 +155,7 @@ dotkeep restore
 ```
 dotkeep <command>
 
-init [DIR]   home/ root/ + empty .dotkeep.conf + git init
+init [DIR]   home/ root/ + empty .dotkeep.conf + .gitignore + git init
 config       show .dotkeep.conf path + contents
 check        validate + resolve paths
 backup       copy live files into the repo
@@ -135,26 +165,7 @@ help
 
 ## Env
 
-`NO_COLOR` disables color.
-
-## Install
-
-Needs `bash`, `rsync`, `git`, and `tree`.
-
-```sh
-mkdir -p ~/.local/bin
-curl -fsSL -o ~/.local/bin/dotkeep \
-  https://raw.githubusercontent.com/metaory/dotkeep/master/dotkeep
-chmod +x ~/.local/bin/dotkeep
-```
-
-Or from a local clone:
-
-```sh
-install -Dm755 dotkeep ~/.local/bin/dotkeep
-```
-
-`~/.local/bin` must be on `PATH`.
+`NO_COLOR` disables color
 
 ## License
 
