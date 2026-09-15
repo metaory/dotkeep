@@ -5,6 +5,7 @@ function help::intro {
 ${C6} dotkeep ${c7}// ${c2}dotfiles, kept simple${r}
 
 ${it}${c7}  A single plain-text manifest for syncing configuration with Git${r}
+${it}${c7}  install this binary; backups live in a separate repo${r}
 EOF
   ui::divider c8 ─
 }
@@ -13,7 +14,8 @@ function help::init {
   cat <<EOF
 ${C3}INIT${r}
 ${C2}  $NAME init${r} [DIR]
-  Creates ${c6}home/${r} ${c6}root/${r} + empty ${c6}$DOTCONF${r} + ${c6}.gitignore${r} + ${c6}git init${r}
+  Creates your ${it}state repo${r}: ${c6}home/${r} ${c6}root/${r} + empty ${c6}$DOTCONF${r} + ${c6}.gitignore${r} + ${c6}git init${r}
+  ${it}Pick any other dir, then add your own remote${r}
 
 ${it}  Or skip init: mkdir a dir and write ${c6}$DOTCONF${r} yourself${r}
 ${it}  Next: ${C2}cd${r} to that dir, edit ${c6}$DOTCONF${r}, then ${c2}$NAME backup${r}
@@ -59,11 +61,11 @@ function help::howto {
 function help::layout {
   cat <<EOF
 ${C3}WHERE${r}
-${c2}  config${r} / ${c2}check${r} / ${c2}backup${r} / ${c2}restore${r} run inside ${it}your${r} state dir
-${it}  (the dir that holds ${c6}$DOTCONF)${r}
-${it}  No fixed path or name. Any dir, any git remote, you choose${r}
+${c2}  config${r} / ${c2}check${r} / ${c2}backup${r} / ${c2}restore${r} run inside ${it}your state dir${r}
+${it}  (the dir that holds ${c6}$DOTCONF${r}). Not the tool install.${r}
+${it}  Any path, any remote, you choose${r}
 
-    ${c2}repo/${r}
+    ${c2}state/${r}
     ${c6}├── ${c3}$DOTCONF${r}
     ${c6}├── ${c3}.gitignore${r}
     ${c6}├── home/${r}
@@ -127,11 +129,11 @@ function help::cmds {
 ${C3}COMMANDS${r}
   ${C2}$NAME ${c2}<command>${r}
 
-  ${c2}init${r} [DIR]   ${c6}home/ root/${r} + ${c6}$DOTCONF${r} + ${c6}git setup${r}
+  ${c2}init${r} [DIR]   create ${it}state repo${r}, ${c6}home/ root/${r} + ${c6}$DOTCONF${r} + git
   ${c2}config${r}       show ${c6}$DOTCONF${r} path + contents
   ${c2}check${r}        validate + resolve paths
-  ${c2}backup${r}       copy live files into the repo
-  ${c2}restore${r}      copy repo files onto the live system
+  ${c2}backup${r}       copy live files into the state repo
+  ${c2}restore${r}      copy state repo files onto the live system
   ${c2}help${r}
 EOF
   ui::divider c8 -

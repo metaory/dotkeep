@@ -27,6 +27,8 @@
 
 Needs `bash`, `git`, `rsync`, `tree`, `tput`, `sed`, and GNU coreutils
 
+This repo is the **tool** only. Your backups live in a **separate** Git repo (see Init).
+
 ```sh
 git clone https://github.com/metaory/dotkeep
 cd dotkeep
@@ -44,7 +46,8 @@ ln -s "$(realpath dotkeep)" /path/on/PATH/dotkeep
 dotkeep init [DIR]
 ```
 
-Creates `home/`, `root/`, empty `.dotkeep.conf`, a default `.gitignore`, and `git init`
+Creates your **state repo**: `home/`, `root/`, empty `.dotkeep.conf`, a default `.gitignore`, and `git init`.
+Not this project's clone. Pick any other dir, then add your own remote.
 
 > [!TIP]
 >
@@ -109,11 +112,11 @@ root/etc/hosts    is  /etc/hosts
 
 ## Where
 
-`config` / `check` / `backup` / `restore` run from the dir that holds
-`.dotkeep.conf`. No fixed path or name: pick any dir, any git remote
+`config` / `check` / `backup` / `restore` run from **your state dir**
+(the one with `.dotkeep.conf`). Not the tool install. Any path, any remote.
 
 ```
-repo/
+state/
 ├── .dotkeep.conf
 ├── .gitignore
 ├── home/
@@ -174,11 +177,11 @@ dotkeep restore
 ```
 dotkeep <command>
 
-init [DIR]   home/ root/ + empty .dotkeep.conf + .gitignore + git init
+init [DIR]   create state repo (home/ root/ + .dotkeep.conf + git)
 config       show .dotkeep.conf path + contents
 check        validate + resolve paths
-backup       copy live files into the repo
-restore      copy repo files onto the live system
+backup       copy live files into the state repo
+restore      copy state repo files onto the live system
 help
 ```
 

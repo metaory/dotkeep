@@ -18,21 +18,21 @@ Set WindowBar Colorful
 Set WindowBarSize 80
 
 Type "dotkeep"
-Sleep 1s
+Sleep 2s
 Enter
 Hide
 ScrollUp 100
 Show
 Sleep 3s
-ScrollDown@60ms 5 # init
+ScrollDown@30ms 6 # init
 Sleep 3s
-ScrollDown@60ms 7 # config
+ScrollDown@30ms 9 # config
 Sleep 3s
-ScrollDown@60ms 31 # where
+ScrollDown@30ms 31 # where
 Sleep 3s
-ScrollDown@60ms 11 # backup
+ScrollDown@30ms 11 # backup
 Sleep 3s
-ScrollDown@60ms 18 # restore
+ScrollDown@30ms 18 # restore
 Sleep 3s
-ScrollDown@60ms 30 # tail
+ScrollDown@30ms 30 # tail
 Sleep 3s
