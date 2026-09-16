@@ -135,6 +135,7 @@ into this repo (`home/` and `root/`). Asks before writing
 > [!NOTE]
 >
 > Ignored paths under `home/` / `root/` are pruned via `git clean -X`
+> Files over 10 MiB are skipped and warned, not fatal; blobs already committed over 100 MiB still fail push until history is rewritten
 > Next: `git add` / `commit` yourself. Dotkeep does not commit
 
 ```sh

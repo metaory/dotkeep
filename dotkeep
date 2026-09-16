@@ -6,14 +6,19 @@ NAME=dotkeep
 DOTCONF=.$NAME.conf
 ROOT=
 MANIFEST=
-RSYNC=(rsync -rptgo --delete --no-owner --no-group --exclude=.git)
+UNREAD=0
+# tighter than GitHub's 100 MiB reject
+MAX=$((10 * 1024 * 1024))
+PUSH=$((100 * 1024 * 1024))
+RSYNC=(rsync -rptgo --no-owner --no-group --exclude=.git)
+declare -A T=()
 
 ((BASH_VERSINFO[0] >= 5)) || {
   printf '%s: need bash 5+, found %s\n' "$NAME" "${BASH_VERSION:-?}" >&2
   exit 1
 }
 
-for bin in basename cat dirname git mkdir mktemp readlink rsync sed sort tput tree; do
+for bin in basename cat dirname git mkdir mktemp readlink realpath rsync sed sort tput tree; do
   command -v "$bin" >/dev/null && continue
   printf '%s: missing command: %s\n' "$NAME" "$bin" >&2
   exit 1
@@ -149,7 +154,7 @@ function view::config {
     vises+=("$vis")
     ((${#vis} > llen)) && llen=${#vis}
   done
-  # title: ╭─ TITLE ─…╮  → width = title + dashes + 5
+  # title: ╭─ TITLE ─╮  → width = title + dashes + 5
   # body:  │ TEXT  … │  → TEXT+pad = width - 4
   dashes=1
   width=$((${#title} + dashes + 5))
@@ -157,14 +162,14 @@ function view::config {
     width=$((llen + 4))
     dashes=$((width - ${#title} - 5))
   }
-  for ((i = 0; i < dashes; i++)); do top+=─; done
-  for ((i = 0; i < width - 2; i++)); do bot+=─; done
-  printf '  %s╭─ %s%s%s %s╮%s\n' "$border_color" "$c1" "$title" "$border_color" "$top" "$r"
+  for ((i = 0; i < dashes; i++)); do top+=━; done
+  for ((i = 0; i < width - 2; i++)); do bot+=━; done
+  printf '  %s┏━ %s%s%s %s┓%s\n' "$border_color" "$c1" "$title" "$border_color" "$top" "$r"
   for i in "${!lines[@]}"; do
     pad=$(printf '%*s' $((width - 4 - ${#vises[i]})) '')
-    printf '  %s│ %s%s │%s\n' "$border_color" "$(ui::paint "${lines[i]}")" "$pad" "$r"
+    printf '  %s┃ %s%s ┃%s\n' "$border_color" "$(ui::paint "${lines[i]}")" "$pad" "$r"
   done
-  printf '  %s╰%s╯%s\n' "$border_color" "$bot" "$r"
+  printf '  %s┗%s┛%s\n' "$border_color" "$bot" "$r"
 }
 
 # view::manifest [TITLE] — load $MANIFEST into the shared box
@@ -333,6 +338,149 @@ function ask::yn {
 }
 
 #  ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  ┃  TALLY
+#  ┗━━━━━━━━
+
+function tally { ((++T[$1])); }
+
+function tally::add { ((T[$1] += $2)); }
+
+function tally::why {
+  case $1 in
+  symlink) tally symlink ;;
+  'not on machine' | 'not in repo') tally miss ;;
+  'same path') tally same ;;
+  'dest outside repo') tally outside ;;
+  'type mismatch') tally clash ;;
+  *) tally skip ;;
+  esac
+}
+
+function tally::color {
+  case $1 in
+  ok) printf '%s' "$c2" ;;
+  clash) printf '%s' "$c1" ;;
+  *) printf '%s' "$C3" ;;
+  esac
+}
+
+function tally::end {
+  local cmd=$1 k n col tc=$c2
+  local -a keys=() ns=()
+  local kw=0 nw=0 i top='' bot='' dashes width llen pad kgap ngap
+  for k in ok large skip some unreadable symlink miss clash same outside; do
+    n=${T[$k]:-0}
+    ((n)) || continue
+    keys+=("$k")
+    ns+=("$n")
+    ((${#k} > kw)) && kw=${#k}
+    ((${#n} > nw)) && nw=${#n}
+  done
+  ((${#keys[@]})) || {
+    keys=(ok)
+    ns=(0)
+    kw=2
+    nw=1
+  }
+  ((${T[clash]:-0})) && tc=$c1
+  llen=$((kw + 2 + nw))
+  dashes=1
+  width=$((${#cmd} + dashes + 5))
+  ((width < llen + 4)) && {
+    width=$((llen + 4))
+    dashes=$((width - ${#cmd} - 5))
+  }
+  for ((i = 0; i < dashes; i++)); do top+=━; done
+  for ((i = 0; i < width - 2; i++)); do bot+=━; done
+  ui::nl
+  printf '  %s┏━ %s%s%s %s┓%s\n' "$border_color" "$tc" "$cmd" "$border_color" "$top" "$r"
+  for i in "${!keys[@]}"; do
+    k=${keys[i]}
+    n=${ns[i]}
+    col=$(tally::color "$k")
+    pad=$(printf '%*s' $((width - 4 - llen)) '')
+    kgap=$(printf '%*s' $((kw - ${#k})) '')
+    ngap=$(printf '%*s' $((nw - ${#n})) '')
+    printf "  %s┃ %s%s%s  %s%s%s%s%s ${border_color}┃%s\n" \
+      "$border_color" "$col" "$k" "$kgap" "$col" "$ngap" "$n" "$pad" "$r"
+  done
+  printf '  %s┗%s┛%s\n' "$border_color" "$bot" "$r"
+}
+
+#  ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  ┃  SIZE
+#  ┗━━━━━━━━
+
+function size::mib {
+  printf '%d.%02d MiB' $(($1 / 1048576)) $((($1 % 1048576) * 100 / 1048576))
+}
+
+# size::scan ROOT — bytes<TAB>path for regular files over MAX
+function size::scan {
+  local b p
+  [[ -e $1 && ! -L $1 ]] || return 0
+  find "$1" -type f -printf '%s\t%p\n' | while IFS=$'\t' read -r b p; do
+    ((b <= MAX)) && continue
+    printf '%s\t%s\n' "$b" "$p"
+  done || :
+}
+
+# size::rows ROOT LABEL — bytes<TAB>display, label plus path under ROOT
+function size::rows {
+  local root=$1 label=$2 b p rel
+  while IFS=$'\t' read -r b p; do
+    rel=${p#"$root"}
+    rel=${rel#/}
+    [[ $rel ]] && rel="/$rel"
+    printf '%s\t%s\n' "$b" "$label$rel"
+  done < <(size::scan "$root")
+}
+
+function size::warn {
+  local b p
+  while IFS=$'\t' read -r b p; do
+    ui::log warn size "$(size::mib "$b")" "$p"
+    tally large
+  done < <(size::rows "$@")
+}
+
+function size::history {
+  local type sz oid path note
+  [[ -d .git ]] || return 0
+  git rev-list --objects --all 2>/dev/null |
+    git cat-file --batch-check='%(objecttype) %(objectsize) %(objectname) %(rest)' |
+    while read -r type sz oid path; do
+      [[ $type == blob ]] || continue
+      [[ $sz =~ ^[0-9]+$ ]] || continue
+      ((sz > MAX)) || continue
+      note='in history'
+      ((sz > PUSH)) && note='in history, push will reject'
+      ui::log warn size "$(size::mib "$sz")" "${path:-$oid}" "$note"
+    done || :
+}
+
+# size::exclude SRC DST — drop repo leftovers; tally only ones preview missed
+function size::exclude {
+  local src=$1 dst=$2 b p rel removed=0
+  local -A hit=()
+  [[ -e $dst && ! -L $dst ]] || return 0
+  while IFS=$'\t' read -r b p; do
+    rel=${p#"$src"}
+    rel=${rel#/}
+    hit[${rel:-.}]=1
+  done < <(size::scan "$src")
+  while IFS=$'\t' read -r b p; do
+    rel=${p#"$dst"}
+    rel=${rel#/}
+    rm -f -- "$p"
+    ((++removed))
+    [[ -v hit[${rel:-.}] ]] || tally large
+  done < <(size::scan "$dst")
+  ((removed)) || return 0
+  ui::log warn size "dropped $removed" "over 10 MiB"
+}
+
+#  ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  ┃  SYNC
 #  ┗━━━━━━━━
 
@@ -356,26 +504,41 @@ function sync::ends {
   esac
 }
 
-# sync::skip SRC SIDE WHY_NAMEREF — 0 = skip (sets why), 1 = usable
+# sync::skip SRC DST SIDE WHY_NAMEREF — 0 = skip (sets why), 1 = usable
 function sync::skip {
-  local src=$1 side=$2
-  local -n _why=$3
+  local src=$1 dst=$2 side=$3
+  local -n _why=$4
   [[ -L $src ]] && {
     _why=symlink
     return 0
   }
-  [[ -e $src ]] && return 1
-  case $side in
-  backup) _why='not on machine' ;;
-  restore) _why='not in repo' ;;
-  esac
-  return 0
+  [[ -e $src ]] || {
+    case $side in
+    backup) _why='not on machine' ;;
+    restore) _why='not in repo' ;;
+    esac
+    return 0
+  }
+  [[ $(sync::canon "$src") != "$(sync::canon "$dst")" ]] || {
+    _why='same path'
+    return 0
+  }
+  [[ $side != backup ]] || sync::in_repo "$dst" || {
+    _why='dest outside repo'
+    return 0
+  }
+  path::clash "$src" "$dst" && {
+    _why='type mismatch'
+    return 0
+  }
+  return 1
 }
 
 function sync::preview {
   local side=$1
   shift
   local e fs repo src dst from to why n=0
+  ui::nl
   case $side in
   backup) ui::log step backup "machine → repo ${c3}($# paths)" ;;
   restore)
@@ -387,37 +550,73 @@ function sync::preview {
   while IFS=$'\t' read -r e fs repo; do
     sync::ends "$side" "$e" "$fs" "$repo" src dst from to
     why=
-    sync::skip "$src" "$side" why && {
+    sync::skip "$src" "$dst" "$side" why && {
       ui::log warn ' skip' "${c1}$why" "${c3}$from"
       continue
     }
     ((++n))
     case $side in
-    backup) ui::log path '' "$from" ;;
+    backup)
+      ui::log path '' "$from"
+      size::warn "$src" "$e"
+      ;;
     restore) ui::log info '' "$to" ;;
     esac
   done < <(conf::pairs "$@")
+  [[ $side == backup ]] && size::history
   ui::nl
   ((n)) || ui::fatal "no valid sources" "fix $MANIFEST or create the missing paths"
 }
 
+# owned + unreadable cannot be copied; +r is enough and we leave it
+function sync::readable {
+  find "$1" -type f -uid "$UID" ! -readable -exec chmod u+r {} + 2>/dev/null || :
+}
+
+# paths rsync cannot open, relative to SRC, anchored
+function sync::unreadable {
+  [[ -d $1 ]] || return 0
+  find "$1" -mindepth 1 \
+    \( -type d \( ! -readable -o ! -executable \) -prune -printf '/%P\n' \) -o \
+    \( -type f ! -readable -printf '/%P\n' \) \
+    2>/dev/null || :
+}
+
+function sync::canon { realpath -m "$1"; }
+
+# dest must stay inside the state repo even if a symlink points at /etc or $HOME
+function sync::in_repo {
+  local here to
+  here=$(sync::canon .)
+  to=$(sync::canon "$1")
+  [[ $to == "$here"/home/* || $to == "$here"/root/* ]]
+}
+
 function sync::path {
-  local src=$1 dst=$2 rc=0 err
+  local src=$1 dst=$2 side=${3-} rc=0 err skip
+  local -a extra=() lines=() opts=("${RSYNC[@]}")
+  UNREAD=0
+  [[ $side == restore ]] && opts+=(--delete)
+  [[ $side == backup ]] && opts+=(--max-size="$MAX")
   mkdir -p "$(dirname "$dst")"
+  sync::readable "$src"
+  skip=$(sync::unreadable "$src")
+  [[ $skip ]] && {
+    mapfile -t lines <<<"$skip"
+    extra=("${lines[@]/#/--exclude=}")
+    UNREAD=${#lines[@]}
+    ui::log warn some "$src" "$UNREAD unreadable"
+  }
   if [[ -d $src ]]; then
     mkdir -p "$dst"
-    err=$("${RSYNC[@]}" "$src/" "$dst/" 2>&1) || rc=$?
+    err=$("${opts[@]}" "${extra[@]}" "$src/" "$dst/" 2>&1) || rc=$?
   else
-    err=$("${RSYNC[@]}" "$src" "$dst" 2>&1) || rc=$?
+    err=$("${opts[@]}" "${extra[@]}" "$src" "$dst" 2>&1) || rc=$?
   fi
-  if ((rc == 0)); then
-    return 0
-  fi
-  # 23 partial (perms), 24 vanished mid-transfer
-  if ((rc == 23 || rc == 24)); then
-    ui::log warn skip "$src" "unreadable or vanished files"
-    return 0
-  fi
+  [[ $side == backup && (rc -eq 0 || rc -eq 23 || rc -eq 24) ]] && size::exclude "$src" "$dst"
+  ((rc)) || return 0
+  # 23 partial, 24 vanished mid-transfer
+  ((rc == 23 || rc == 24)) && return 0
   [[ $err ]] && printf '%s\n' "$err" >&2
   return "$rc"
 }
@@ -433,7 +632,7 @@ function sync::safety {
   ui::log step backup "$_bak"
   while IFS=$'\t' read -r e fs repo; do
     [[ -L $fs || ! -e $fs ]] && continue
-    path::clash "$fs" "$repo" && ui::die "type mismatch: $e"
+    path::clash "$fs" "$repo" && continue
     sync::path "$fs" "$_bak/$e"
     ui::log info bak "$_bak/$e"
     ((++_n))
@@ -445,12 +644,11 @@ function sync::safety {
 
 function sync::one {
   local side=$1 e=$2 fs=$3 repo=$4 src=$5 dst=$6 from=$7 to=$8
-  path::clash "$fs" "$repo" && ui::die "type mismatch: $e"
   case $side in
   backup) ui::log path '' "${c6}$from" ;;
   restore) ui::log info '' "${c2}$to" ;;
   esac
-  sync::path "$src" "$dst"
+  sync::path "$src" "$dst" "$side"
 }
 
 function sync::prune {
@@ -471,6 +669,8 @@ function sync::run {
   local side=$1
   local -n _es=$2
   local e fs repo src dst from to bak='' n=0 why
+  unset T
+  declare -gA T=()
 
   "help::$side"
   ui::nl
@@ -485,12 +685,21 @@ function sync::run {
   while IFS=$'\t' read -r e fs repo; do
     sync::ends "$side" "$e" "$fs" "$repo" src dst from to
     why=
-    sync::skip "$src" "$side" why && continue
+    sync::skip "$src" "$dst" "$side" why && {
+      tally::why "$why"
+      continue
+    }
     sync::one "$side" "$e" "$fs" "$repo" "$src" "$dst" "$from" "$to"
+    ((UNREAD)) && {
+      tally some
+      tally::add unreadable "$UNREAD"
+      continue
+    }
+    tally ok
   done < <(conf::pairs "${_es[@]}")
 
   [[ $side != backup ]] || sync::prune
-  ui::log ok "${side} done"
+  tally::end "$side"
   ui::nl
   [[ $side != backup ]] || sync::git
   ui::nl
@@ -531,30 +740,40 @@ function cmd::config {
 }
 
 function cmd::check {
-  local es=() e fs repo err=0
+  local es=() e fs repo
+  unset T
+  declare -gA T=()
   conf::entries es
   while IFS=$'\t' read -r e fs repo; do
     ui::log step path "${c2}$fs"
     ui::log info keep "${c33}$e"
     [[ -L $fs ]] && {
       ui::log warn skip symlink
+      tally symlink
       continue
     }
     [[ -e $fs ]] || {
       ui::log warn miss "${C3}missing on machine"
+      tally miss
       continue
     }
+    size::warn "$fs" "$e"
     [[ -e $repo ]] || {
       ui::log warn miss "${C3}missing in repo"
+      tally miss
       continue
     }
-    path::clash "$fs" "$repo" || continue
-    ui::log err type "type mismatch"
-    err=1
+    path::clash "$fs" "$repo" && {
+      ui::log err type "type mismatch"
+      tally clash
+      continue
+    }
+    tally ok
   done < <(conf::pairs "${es[@]}")
-  ((err == 0)) || ui::die "check failed"
-  ui::divider c4 ━
-  ui::log ok check "${c6}${#es[@]} entries${r}"
+  size::history
+  tally::end check
+  ((${T[clash]:-0})) || return 0
+  exit 1
 }
 
 function cmd::sync {

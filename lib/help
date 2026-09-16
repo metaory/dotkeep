@@ -80,6 +80,8 @@ ${C3}BACKUP${r}
 ${C2}  $NAME ${c2}backup${r}
   Reads ${c6}$DOTCONF${r}. Copies each listed path from the live system
   into this repo (${c6}home/${r} and ${c6}root/${r}). Asks before writing
+  Files over ${c1}10 MiB${r} are skipped and warned, not fatal
+  Blobs already committed over ${c1}100 MiB${r} still fail push until history is rewritten
   ${it}${c3}Dotkeep does not commit.${r} Git is yours after the copy
 
   ${C6}workflow${r}
