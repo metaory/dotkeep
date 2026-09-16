@@ -11,14 +11,12 @@
   <a href="#init">Init</a> ·
   <a href="#config">Config</a> ·
   <a href="#backup">Backup</a> ·
-  <a href="#restore">Restore</a> ·
-  <a href="#commands">Commands</a> ·
-  <a href="#env">Env</a>
+  <a href="#restore">Restore</a>
 </p>
 
 <div align="center">
 
-[help.webm](https://github.com/user-attachments/assets/c40d0e08-9b08-4edf-aa01-e8e608889162)
+[help.webm](https://github.com/user-attachments/assets/0a497495-ab75-41ce-ab3d-38acf48b84ff)
 
 </div>
 
@@ -28,31 +26,45 @@
 
 Needs `bash`, `git`, `rsync`, `tree`, `tput`, `sed`, and GNU coreutils
 
-This repo is the **tool** only. Your backups live in a **separate** Git repo (see Init).
+> [!IMPORTANT]
+>
+> This repo is the **tool** only.
+>
+> Your backups live in a **separate** Git repo ( see [Init](#init) )
 
 ```sh
 git clone https://github.com/metaory/dotkeep
 cd dotkeep
 ```
 
-Symlink `dotkeep` into any directory on your `PATH`:
+Then put it on PATH:
 
 ```sh
-ln -s "$(realpath dotkeep)" /path/on/PATH/dotkeep
+# a dir you already have on PATH
+ln -s "$(realpath dotkeep)" /your/path/dir/dotkeep
+
+# or we handle it
+sudo ln -s "$(realpath dotkeep)" /usr/local/bin/dotkeep
 ```
 
 ## Init
 
 ```sh
+# on a new empty directory
 dotkeep init [DIR]
 ```
 
-Creates your **state repo**: `home/`, `root/`, empty `.dotkeep.conf`, a default `.gitignore`, and `git init`.
-Not this project's clone. Pick any other dir, then add your own remote.
+Creates your **state repo**:
+
+- `home/`, `root/`,
+- empty `.dotkeep.conf`,
+- a default `.gitignore`
+- `git init`
 
 > [!TIP]
 >
 > Or skip init: mkdir a dir and write `.dotkeep.conf` yourself
+>
 > Next: `cd` into that dir, edit `.dotkeep.conf`, then `dotkeep backup`
 
 ```sh
@@ -71,20 +83,28 @@ Shows the full path to `.dotkeep.conf` and its contents
 
 > [!NOTE]
 > Plain file. One path per line. `#` comments
+>
 > Every entry must start with `home/` or `root/`
 
 > [!CAUTION]
 >
 > No `~`, no absolute `/` forms, no `$VAR` expansion
+>
 > Prefer explicit files over whole dirs
+>
 > Unreadable files are skipped. The rest of the dir is copied
+>
 > If both a dir and paths under it are listed, the dir wins and children are dropped
 
 > [!IMPORTANT]
 >
-> Symlinks are skipped (leaf and nested). Devices, fifos, and sockets are not synced
-> Nested `.git` and `node_modules` are stripped (content only, not repo metadata)
-> Directory sync respects the state dir `.gitignore` (init seeds a Vite-style default)
+> `symlinks` are skipped (leaf and nested)
+>
+> `devices`, `fifos`, and `sockets` are not synced
+>
+> Nested `.git` and `node_modules` are stripped _(content only, not repo metadata)_
+>
+> Directory sync respects the state dir `.gitignore`
 
 Copy [dotkeep.conf.sample](dotkeep.conf.sample) or start from `dotkeep init`:
 
@@ -115,7 +135,8 @@ root/etc/hosts    is  /etc/hosts
 ## Where
 
 `config` / `check` / `backup` / `restore` run from **your state dir**
-(the one with `.dotkeep.conf`). Not the tool install. Any path, any remote.
+
+(the one with `.dotkeep.conf`). Not the tool install. Any path, any remote
 
 ```
 state/
@@ -131,16 +152,26 @@ state/
 dotkeep backup
 ```
 
-Reads `.dotkeep.conf`. Copies each listed path from the live system
-into this repo (`home/` and `root/`). Asks before writing
+- Reads `.dotkeep.conf`
+- Copies each listed path from the live system
+- into this repo (`home/` and `root/`)
+- Prompt confirmation before writing
 
 > [!NOTE]
 >
 > Ignored paths under `home/` / `root/` are pruned via `git clean -X`
-> Files over 10 MiB skipped and warned
-> `DOTKEEP_MAX` (MiB) default 10, max 100; above 100 capped and warned
-> GitHub rejects over 100 MiB on push; committed blobs still fail
-> Dotkeep does not commit. Git is yours after the copy
+>
+> Files over `10 MiB` skipped and warned
+>
+> `DOTKEEP_MAX` (MiB) default `10`, max `100`; above `100` capped and warned
+>
+> GitHub rejects over `100 MiB` on push; **committed blobs still fail**
+
+> [!IMPORTANT]
+>
+> Dotkeep does not commit
+>
+> Git is yours after the copy
 
 ```sh
 dotkeep check
@@ -156,10 +187,13 @@ git push
 dotkeep restore
 ```
 
-Reads `.dotkeep.conf`. Copies each listed path from this repo
-(`home/` and `root/`) onto the live system. Asks before writing
+- Reads `.dotkeep.conf`
+- Copies each listed path from this repo
+- Prompt confirmation before writing
 
-> Existing live targets go to `/tmp/dotkeep.XXXXXX/` first
+> (`home/` and `root/`) onto the live system
+
+> Existing live targets backups go to `/tmp/dotkeep.XXXXXX/` first
 
 ### New machine:
 
@@ -194,7 +228,8 @@ help
 
 `NO_COLOR` disables color
 
-`DOTKEEP_MAX` skip limit in MiB, default 10, max 100; above 100 capped and warned. GitHub rejects the push
+`DOTKEEP_MAX` skip limit in `MiB`, `default 10`, `max 100`
+above `100` capped and warned. GitHub rejects the push
 
 ## License
 
