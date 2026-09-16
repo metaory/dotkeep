@@ -33,7 +33,8 @@ ${C2}  $NAME ${c2}config${r}
   Every entry must start with ${C2}home/${r} or ${C2}root/${r}
   No ${c1}~${r}, no absolute ${c1}/${r} forms, no ${c1}\$VAR${r} expansion
   Prefer explicit files over whole dirs
-  Symlinks and Nested ${c6}.git/${r} stripped. ${c6}.gitignore${r} is respected
+  Unreadable files are skipped. The rest of the dir is copied
+  Symlinks, nested ${c6}.git/${r} and ${c6}node_modules${r} stripped. ${c6}.gitignore${r} is respected
 
 EOF
 }
@@ -80,8 +81,10 @@ ${C3}BACKUP${r}
 ${C2}  $NAME ${c2}backup${r}
   Reads ${c6}$DOTCONF${r}. Copies each listed path from the live system
   into this repo (${c6}home/${r} and ${c6}root/${r}). Asks before writing
-  Files over ${c1}10 MiB${r} are skipped and warned, not fatal
-  Blobs already committed over ${c1}100 MiB${r} still fail push until history is rewritten
+  Files over ${c1}$((MAX / 1048576)) MiB${r} are skipped and warned, not fatal
+  ${C4}DOTKEEP_MAX${r} (MiB) raises that, default 10, max 100
+  Above 100 is capped and warned. Over 100 MiB GitHub rejects the push
+  Blobs already committed over ${c1}$((PUSH / 1048576)) MiB${r} still fail push until history is rewritten
   ${it}${c3}Dotkeep does not commit.${r} Git is yours after the copy
 
   ${C6}workflow${r}
@@ -144,7 +147,9 @@ EOF
 function help::env {
   cat <<EOF
 ${C3}ENV${r}
-  ${C4}NO_COLOR${r}  disables color
+  ${C4}NO_COLOR${r}     disables color
+  ${C4}DOTKEEP_MAX${r}  skip limit in MiB, default 10, max 100
+    above 100 is capped and warned. GitHub rejects the push
 EOF
 }
 

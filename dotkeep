@@ -7,10 +7,11 @@ DOTCONF=.$NAME.conf
 ROOT=
 MANIFEST=
 UNREAD=0
-# tighter than GitHub's 100 MiB reject
+# skip over this; DOTKEEP_MAX (MiB) raises it, capped at GitHub's 100 MiB
 MAX=$((10 * 1024 * 1024))
 PUSH=$((100 * 1024 * 1024))
-RSYNC=(rsync -rptgo --no-owner --no-group --exclude=.git)
+# Du+w: a source dir without u+w must not make rsync skip every file in it
+RSYNC=(rsync -rptgo --no-owner --no-group --chmod=Du+w --exclude=.git --exclude=node_modules)
 declare -A T=()
 
 ((BASH_VERSINFO[0] >= 5)) || {
@@ -44,6 +45,12 @@ declare -A LOG=(
   [step]='=> C6'
   [path]='·> C2'
 )
+
+function str::trim {
+  local s=$1
+  s=${s#"${s%%[![:space:]]*}"}
+  printf '%s' "${s%"${s##*[![:space:]]}"}"
+}
 
 #  ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  ┃  UI
@@ -91,6 +98,10 @@ function ui::log {
   } >&"$fd"
 }
 
+function ui::next {
+  printf '  %s%s%s\n' "$c3" "$1" "$r"
+}
+
 function ui::divider {
   local colr="${1:-c5}"
   local char="${2:-─}"
@@ -126,9 +137,8 @@ function ui::error {
 }
 
 function ui::paint {
-  local line=${1%$'\r'}
-  line=${line#"${line%%[![:space:]]*}"}
-  line=${line%"${line##*[![:space:]]}"}
+  local line
+  line=$(str::trim "${1%$'\r'}")
   case $line in
   home/*) printf '%s%s%s/%s%s' "$c2" home "$c6" "${line#home/}" "$border_color" ;;
   root/*) printf '%s%s%s/%s%s' "$c2" root "$c6" "${line#root/}" "$border_color" ;;
@@ -142,34 +152,52 @@ function ui::paint {
 #  ┃  VIEW
 #  ┗━━━━━━━━
 
+function view::bars {
+  local s
+  printf -v s '%*s' "$1" ''
+  printf '%s' "${s// /━}"
+}
+
+# width = title + dashes + 5, widened to body + 4
+function view::measure {
+  local -n _w=$1 _d=$2
+  local title=$3 body=$4
+  _d=1
+  _w=$((${#title} + _d + 5))
+  ((_w >= body + 4)) && return 0
+  _w=$((body + 4))
+  _d=$((_w - ${#title} - 5))
+}
+
+function view::open {
+  local top
+  top=$(view::bars "$3")
+  printf '  %s┏━ %s%s%s %s┓%s\n' "$border_color" "$2" "$1" "$border_color" "$top" "$r"
+}
+
+function view::close {
+  local bot
+  bot=$(view::bars $(($1 - 2)))
+  printf '  %s┗%s┛%s\n' "$border_color" "$bot" "$r"
+}
+
 # view::config TITLE LINE... — box render (help sample, config, backup/restore)
 function view::config {
-  local title=$1 line vis pad i top='' bot='' width dashes llen=0
+  local title=$1 line vis pad i width dashes llen=0
   shift
   local -a lines=("$@") vises=()
   for line in "${lines[@]}"; do
-    vis=${line%$'\r'}
-    vis=${vis#"${vis%%[![:space:]]*}"}
-    vis=${vis%"${vis##*[![:space:]]}"}
+    vis=$(str::trim "${line%$'\r'}")
     vises+=("$vis")
     ((${#vis} > llen)) && llen=${#vis}
   done
-  # title: ╭─ TITLE ─╮  → width = title + dashes + 5
-  # body:  │ TEXT  … │  → TEXT+pad = width - 4
-  dashes=1
-  width=$((${#title} + dashes + 5))
-  ((width < llen + 4)) && {
-    width=$((llen + 4))
-    dashes=$((width - ${#title} - 5))
-  }
-  for ((i = 0; i < dashes; i++)); do top+=━; done
-  for ((i = 0; i < width - 2; i++)); do bot+=━; done
-  printf '  %s┏━ %s%s%s %s┓%s\n' "$border_color" "$c1" "$title" "$border_color" "$top" "$r"
+  view::measure width dashes "$title" "$llen"
+  view::open "$title" "$c1" "$dashes"
   for i in "${!lines[@]}"; do
     pad=$(printf '%*s' $((width - 4 - ${#vises[i]})) '')
     printf '  %s┃ %s%s ┃%s\n' "$border_color" "$(ui::paint "${lines[i]}")" "$pad" "$r"
   done
-  printf '  %s┗%s┛%s\n' "$border_color" "$bot" "$r"
+  view::close "$width"
 }
 
 # view::manifest [TITLE] — load $MANIFEST into the shared box
@@ -185,9 +213,7 @@ function view::manifest {
 #  ┗━━━━━━━━
 
 function path::trim {
-  local s=${1%%#*}
-  s=${s#"${s%%[![:space:]]*}"}
-  printf '%s\n' "${s%"${s##*[![:space:]]}"}"
+  printf '%s\n' "$(str::trim "${1%%#*}")"
 }
 
 function path::norm {
@@ -274,31 +300,23 @@ function conf::read {
   local line
   while IFS= read -r line || [[ $line ]]; do
     line=$(path::trim "$line")
-    if [[ $line ]]; then
-      printf '%s\n' "$line"
-    fi
+    [[ $line ]] && printf '%s\n' "$line"
   done <"$MANIFEST"
 }
 
 function conf::parse {
-  local dest=$1
   local -n _out=$1
   local raw n
   local -A seen=()
   _out=()
-  shift
-  for raw; do
-    if [[ -z $raw ]]; then
-      continue
-    fi
+  for raw in "${@:2}"; do
+    [[ $raw ]] || continue
     n=$(path::canon "$raw")
-    if [[ -v seen[$n] ]]; then
-      continue
-    fi
+    [[ -v seen[$n] ]] && continue
     seen[$n]=1
     _out+=("$n")
   done
-  path::overlap "$dest"
+  path::overlap "$1"
 }
 
 function conf::entries {
@@ -321,11 +339,11 @@ function conf::pairs {
 #  ┃  ASK
 #  ┗━━━━━━━
 
-function ask::tty { [[ -t 0 || -r /dev/tty ]] || echo FAIL; }
+function ask::tty { [[ -t 0 || -r /dev/tty ]]; }
 
 function ask::yn {
   local ans='' tty
-  ask::tty
+  ask::tty || ui::die "no tty"
   exec {tty}<>/dev/tty
   printf '%s%s%s %s[y/N]%s ' "$c3" "$1" "$r" "$C2" "$r" >&"$tty"
   IFS= read -r -n 1 -u "$tty" ans || true
@@ -341,20 +359,21 @@ function ask::yn {
 #  ┃  TALLY
 #  ┗━━━━━━━━
 
+# why string → tally key
+declare -A WHY=(
+  [symlink]=symlink
+  ['not on machine']=miss
+  ['not in repo']=miss
+  ['same path']=same
+  ['dest outside repo']=outside
+  ['type mismatch']=clash
+)
+
 function tally { ((++T[$1])); }
 
 function tally::add { ((T[$1] += $2)); }
 
-function tally::why {
-  case $1 in
-  symlink) tally symlink ;;
-  'not on machine' | 'not in repo') tally miss ;;
-  'same path') tally same ;;
-  'dest outside repo') tally outside ;;
-  'type mismatch') tally clash ;;
-  *) tally skip ;;
-  esac
-}
+function tally::why { tally "${WHY[$1]:-skip}"; }
 
 function tally::color {
   case $1 in
@@ -367,7 +386,7 @@ function tally::color {
 function tally::end {
   local cmd=$1 k n col tc=$c2
   local -a keys=() ns=()
-  local kw=0 nw=0 i top='' bot='' dashes width llen pad kgap ngap
+  local kw=0 nw=0 i width dashes llen pad kgap ngap
   for k in ok large skip some unreadable symlink miss clash same outside; do
     n=${T[$k]:-0}
     ((n)) || continue
@@ -384,16 +403,9 @@ function tally::end {
   }
   ((${T[clash]:-0})) && tc=$c1
   llen=$((kw + 2 + nw))
-  dashes=1
-  width=$((${#cmd} + dashes + 5))
-  ((width < llen + 4)) && {
-    width=$((llen + 4))
-    dashes=$((width - ${#cmd} - 5))
-  }
-  for ((i = 0; i < dashes; i++)); do top+=━; done
-  for ((i = 0; i < width - 2; i++)); do bot+=━; done
+  view::measure width dashes "$cmd" "$llen"
   ui::nl
-  printf '  %s┏━ %s%s%s %s┓%s\n' "$border_color" "$tc" "$cmd" "$border_color" "$top" "$r"
+  view::open "$cmd" "$tc" "$dashes"
   for i in "${!keys[@]}"; do
     k=${keys[i]}
     n=${ns[i]}
@@ -404,7 +416,7 @@ function tally::end {
     printf "  %s┃ %s%s%s  %s%s%s%s%s ${border_color}┃%s\n" \
       "$border_color" "$col" "$k" "$kgap" "$col" "$ngap" "$n" "$pad" "$r"
   done
-  printf '  %s┗%s┛%s\n' "$border_color" "$bot" "$r"
+  view::close "$width"
 }
 
 #  ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -415,11 +427,30 @@ function size::mib {
   printf '%d.%02d MiB' $(($1 / 1048576)) $((($1 % 1048576) * 100 / 1048576))
 }
 
+# DOTKEEP_MAX in MiB. Above GitHub's reject, warn and cap.
+function size::limit {
+  local n=${DOTKEEP_MAX:-} cap=$((PUSH / 1048576))
+  [[ $n ]] || return 0
+  [[ $n =~ ^[0-9]+$ ]] || {
+    ui::log warn size "DOTKEEP_MAX=$n" "ignored, using $((MAX / 1048576)) MiB"
+    return 0
+  }
+  ((${#n} > 3 || 10#$n > cap)) && {
+    ui::log warn size "DOTKEEP_MAX=$n" "GitHub rejects over $cap MiB, using $cap"
+    n=$cap
+  }
+  ((10#$n < 1)) && {
+    ui::log warn size "DOTKEEP_MAX=$n" "ignored, using $((MAX / 1048576)) MiB"
+    return 0
+  }
+  MAX=$((10#$n * 1024 * 1024))
+}
+
 # size::scan ROOT — bytes<TAB>path for regular files over MAX
 function size::scan {
   local b p
   [[ -e $1 && ! -L $1 ]] || return 0
-  find "$1" -type f -printf '%s\t%p\n' | while IFS=$'\t' read -r b p; do
+  find "$1" -type f -printf '%s\t%p\n' 2>/dev/null | while IFS=$'\t' read -r b p; do
     ((b <= MAX)) && continue
     printf '%s\t%s\n' "$b" "$p"
   done || :
@@ -439,7 +470,8 @@ function size::rows {
 function size::warn {
   local b p
   while IFS=$'\t' read -r b p; do
-    ui::log warn size "$(size::mib "$b")" "$p"
+    ui::log warn size "${c1}$(size::mib "$b")${r}"
+    ui::next "$p"
     tally large
   done < <(size::rows "$@")
 }
@@ -455,7 +487,8 @@ function size::history {
       ((sz > MAX)) || continue
       note='in history'
       ((sz > PUSH)) && note='in history, push will reject'
-      ui::log warn size "$(size::mib "$sz")" "${path:-$oid}" "$note"
+      ui::log warn size "${c1}$(size::mib "$sz")${r}" "$note"
+      ui::next "${path:-$oid}"
     done || :
 }
 
@@ -477,7 +510,7 @@ function size::exclude {
     [[ -v hit[${rel:-.}] ]] || tally large
   done < <(size::scan "$dst")
   ((removed)) || return 0
-  ui::log warn size "dropped $removed" "over 10 MiB"
+  ui::log warn size "dropped $removed" "over $((MAX / 1048576)) MiB"
 }
 
 #  ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -582,6 +615,18 @@ function sync::unreadable {
     2>/dev/null || :
 }
 
+# dest dirs need u+w during the copy; put source dir modes back after
+function sync::modes {
+  local src=$1 dst=$2 mode path rel
+  [[ -d $src && -d $dst ]] || return 0
+  while IFS= read -r -d '' path; do
+    mode=$(stat -c %a -- "$path")
+    rel=${path#"$src"}
+    rel=${rel#/}
+    chmod -- "$mode" "$dst${rel:+/$rel}" 2>/dev/null || :
+  done < <(find "$src" -type d -print0 2>/dev/null || :)
+}
+
 function sync::canon { realpath -m "$1"; }
 
 # dest must stay inside the state repo even if a symlink points at /etc or $HOME
@@ -593,7 +638,7 @@ function sync::in_repo {
 }
 
 function sync::path {
-  local src=$1 dst=$2 side=${3-} rc=0 err skip
+  local src=$1 dst=$2 side=${3-} rc=0 err skip tail=
   local -a extra=() lines=() opts=("${RSYNC[@]}")
   UNREAD=0
   [[ $side == restore ]] && opts+=(--delete)
@@ -607,16 +652,19 @@ function sync::path {
     UNREAD=${#lines[@]}
     ui::log warn some "$src" "$UNREAD unreadable"
   }
-  if [[ -d $src ]]; then
+  [[ -d $src ]] && {
     mkdir -p "$dst"
-    err=$("${opts[@]}" "${extra[@]}" "$src/" "$dst/" 2>&1) || rc=$?
-  else
-    err=$("${opts[@]}" "${extra[@]}" "$src" "$dst" 2>&1) || rc=$?
-  fi
-  [[ $side == backup && (rc -eq 0 || rc -eq 23 || rc -eq 24) ]] && size::exclude "$src" "$dst"
-  ((rc)) || return 0
-  # 23 partial, 24 vanished mid-transfer
-  ((rc == 23 || rc == 24)) && return 0
+    tail=/
+  }
+  err=$("${opts[@]}" "${extra[@]}" "$src$tail" "$dst$tail" 2>&1) || rc=$?
+  # 0 ok, 23 partial, 24 vanished mid-transfer; one denied file is not a failed dir
+  case $rc in
+  0 | 23 | 24)
+    sync::modes "$src" "$dst"
+    [[ $side == backup ]] && size::exclude "$src" "$dst"
+    return 0
+    ;;
+  esac
   [[ $err ]] && printf '%s\n' "$err" >&2
   return "$rc"
 }
@@ -643,7 +691,7 @@ function sync::safety {
 }
 
 function sync::one {
-  local side=$1 e=$2 fs=$3 repo=$4 src=$5 dst=$6 from=$7 to=$8
+  local side=$1 src=$2 dst=$3 from=$4 to=$5
   case $side in
   backup) ui::log path '' "${c6}$from" ;;
   restore) ui::log info '' "${c2}$to" ;;
@@ -679,8 +727,8 @@ function sync::run {
 
   ask::yn " are you sure?" || ui::die "aborted"
 
-  [[ $side != restore ]] || sync::safety "$2" bak n
-  [[ $side != restore ]] || sync::prune
+  [[ $side == restore ]] && sync::safety "$2" bak n
+  [[ $side == restore ]] && sync::prune
 
   while IFS=$'\t' read -r e fs repo; do
     sync::ends "$side" "$e" "$fs" "$repo" src dst from to
@@ -689,7 +737,7 @@ function sync::run {
       tally::why "$why"
       continue
     }
-    sync::one "$side" "$e" "$fs" "$repo" "$src" "$dst" "$from" "$to"
+    sync::one "$side" "$src" "$dst" "$from" "$to"
     ((UNREAD)) && {
       tally some
       tally::add unreadable "$UNREAD"
@@ -698,14 +746,12 @@ function sync::run {
     tally ok
   done < <(conf::pairs "${_es[@]}")
 
-  [[ $side != backup ]] || sync::prune
+  [[ $side == backup ]] && sync::prune
   tally::end "$side"
   ui::nl
-  [[ $side != backup ]] || sync::git
+  [[ $side == backup ]] && sync::git
   ui::nl
-  if [[ $side == restore && n -gt 0 ]]; then
-    ui::log info prior "$bak"
-  fi
+  [[ $side == restore && n -gt 0 ]] && ui::log info prior "$bak" || :
 }
 
 #  ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -787,6 +833,8 @@ function cmd::sync {
 #  ┗━━━━━━━━
 
 trap 'ui::error "$?" "$LINENO" "$BASH_COMMAND"' ERR
+
+size::limit
 
 cmd=${1:-help}
 shift || true

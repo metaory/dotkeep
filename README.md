@@ -12,7 +12,8 @@
   <a href="#config">Config</a> ·
   <a href="#backup">Backup</a> ·
   <a href="#restore">Restore</a> ·
-  <a href="#commands">Commands</a>
+  <a href="#commands">Commands</a> ·
+  <a href="#env">Env</a>
 </p>
 
 <div align="center">
@@ -76,12 +77,13 @@ Shows the full path to `.dotkeep.conf` and its contents
 >
 > No `~`, no absolute `/` forms, no `$VAR` expansion
 > Prefer explicit files over whole dirs
+> Unreadable files are skipped. The rest of the dir is copied
 > If both a dir and paths under it are listed, the dir wins and children are dropped
 
 > [!IMPORTANT]
 >
 > Symlinks are skipped (leaf and nested). Devices, fifos, and sockets are not synced
-> Nested `.git` directories are stripped (content only, not repo metadata)
+> Nested `.git` and `node_modules` are stripped (content only, not repo metadata)
 > Directory sync respects the state dir `.gitignore` (init seeds a Vite-style default)
 
 Copy [dotkeep.conf.sample](dotkeep.conf.sample) or start from `dotkeep init`:
@@ -135,7 +137,9 @@ into this repo (`home/` and `root/`). Asks before writing
 > [!NOTE]
 >
 > Ignored paths under `home/` / `root/` are pruned via `git clean -X`
-> Files over 10 MiB are skipped and warned, not fatal; blobs already committed over 100 MiB still fail push until history is rewritten
+> Files over 10 MiB are skipped and warned, not fatal
+> `DOTKEEP_MAX` (MiB) raises that, default 10, max 100. Above 100 is capped and warned. Over 100 MiB GitHub rejects the push
+> Blobs already committed over 100 MiB still fail push until history is rewritten
 > Next: `git add` / `commit` yourself. Dotkeep does not commit
 
 ```sh
@@ -189,6 +193,8 @@ help
 ## Env
 
 `NO_COLOR` disables color
+
+`DOTKEEP_MAX` skip limit in MiB, default 10, max 100. Above 100 is capped and warned. GitHub rejects the push
 
 ## License
 
