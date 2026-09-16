@@ -14,7 +14,8 @@ function help::init {
   cat <<EOF
 ${C3}INIT${r}
 ${C2}  $NAME init${r} [DIR]
-  Creates your ${it}state repo${r}: ${c6}home/${r} ${c6}root/${r} + empty ${c6}$DOTCONF${r} + ${c6}.gitignore${r} + ${c6}git init${r}
+  Creates your ${it}state repo${r}: 
+    ${c6}home/${r} ${c6}root/${r} + empty ${c6}$DOTCONF${r} + ${c6}.gitignore${r} + ${c6}git init${r}
   ${it}Pick any other dir, then add your own remote${r}
 
 ${it}  Or skip init: mkdir a dir and write ${c6}$DOTCONF${r} yourself${r}
@@ -34,7 +35,8 @@ ${C2}  $NAME ${c2}config${r}
   No ${c1}~${r}, no absolute ${c1}/${r} forms, no ${c1}\$VAR${r} expansion
   Prefer explicit files over whole dirs
   Unreadable files are skipped. The rest of the dir is copied
-  Symlinks, nested ${c6}.git/${r} and ${c6}node_modules${r} stripped. ${c6}.gitignore${r} is respected
+  Symlinks, nested ${c6}.git/${r} and ${c6}node_modules${r} stripped 
+  ${c6}.gitignore${r} is respected
 
 EOF
 }
@@ -63,7 +65,7 @@ function help::layout {
   cat <<EOF
 ${C3}WHERE${r}
 ${c2}  config${r} / ${c2}check${r} / ${c2}backup${r} / ${c2}restore${r} run inside ${it}your state dir${r}
-${it}  (the dir that holds ${c6}$DOTCONF${r}). Not the tool install.${r}
+${it}  (the dir that holds ${c6}$DOTCONF${r}). Not the tool install${r}
 ${it}  Any path, any remote, you choose${r}
 
     ${c2}state/${r}
@@ -79,12 +81,11 @@ function help::backup {
   cat <<EOF
 ${C3}BACKUP${r}
 ${C2}  $NAME ${c2}backup${r}
-  Reads ${c6}$DOTCONF${r}. Copies each listed path from the live system
-  into this repo (${c6}home/${r} and ${c6}root/${r}). Asks before writing
-  Files over ${c1}$((MAX / 1048576)) MiB${r} are skipped and warned, not fatal
-  ${C4}DOTKEEP_MAX${r} (MiB) raises that, default 10, max 100
-  Above 100 is capped and warned. Over 100 MiB GitHub rejects the push
-  Blobs already committed over ${c1}$((PUSH / 1048576)) MiB${r} still fail push until history is rewritten
+  Reads ${c6}$DOTCONF${r} Copies each listed path from the live system
+  into this repo (${c6}home/${r} and ${c6}root/${r}) Asks before writing
+  Files over ${c1}$((MAX / 1048576)) MiB${r} skipped and warned
+  ${C4}DOTKEEP_MAX${r} (MiB) ${c3}default 10${r}, ${c3}max 100${r}; above ${b}100${r} capped and warned
+  GitHub rejects over ${c3}100 MiB${r} on push; committed blobs still fail
   ${it}${c3}Dotkeep does not commit.${r} Git is yours after the copy
 
   ${C6}workflow${r}
@@ -106,7 +107,7 @@ function help::restore {
   cat <<EOF
 ${C3}RESTORE${r}
   ${C2}$NAME ${c2}restore${r}
-  Reads ${c6}$DOTCONF${r}. Copies each listed path from this repo
+  Reads ${c6}$DOTCONF${r} Copies each listed path from this repo
   (${c6}home/${r} and ${c6}root/${r}) onto the live system. Asks before writing
   Existing live targets go to ${C2}/tmp/$NAME.XXXXXX/${r} first
 
@@ -134,7 +135,7 @@ function help::cmds {
 ${C3}COMMANDS${r}
   ${C2}$NAME ${c2}<command>${r}
 
-  ${c2}init${r} [DIR]   create ${it}state repo${r}, ${c6}home/ root/${r} + ${c6}$DOTCONF${r} + git
+  ${c2}init${r} [DIR]   create ${it}state repo${r}, ${c6}home/ root/${r} + ${c6}$DOTCONF${r} + ${c6}git${r}
   ${c2}config${r}       show ${c6}$DOTCONF${r} path + contents
   ${c2}check${r}        validate + resolve paths
   ${c2}backup${r}       copy live files into the state repo
@@ -148,8 +149,8 @@ function help::env {
   cat <<EOF
 ${C3}ENV${r}
   ${C4}NO_COLOR${r}     disables color
-  ${C4}DOTKEEP_MAX${r}  skip limit in MiB, default 10, max 100
-    above 100 is capped and warned. GitHub rejects the push
+  ${C4}DOTKEEP_MAX${r}  skip limit in ${c1}MiB${r}, default ${c1}10${r}, max ${c1}100${r}
+               ${it}above ${b}100${r}${it} capped and warned. GitHub rejects the push${r}
 EOF
 }
 

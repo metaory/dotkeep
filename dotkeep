@@ -72,6 +72,7 @@ function ui::palette {
     printf -v "C$i" '\033[38;5;%s;1m' "$i"
   done
   r=$'\033[0m'
+  b=$'\033[1m'
   it=$'\033[3m'
 }
 ui::palette

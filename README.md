@@ -137,10 +137,10 @@ into this repo (`home/` and `root/`). Asks before writing
 > [!NOTE]
 >
 > Ignored paths under `home/` / `root/` are pruned via `git clean -X`
-> Files over 10 MiB are skipped and warned, not fatal
-> `DOTKEEP_MAX` (MiB) raises that, default 10, max 100. Above 100 is capped and warned. Over 100 MiB GitHub rejects the push
-> Blobs already committed over 100 MiB still fail push until history is rewritten
-> Next: `git add` / `commit` yourself. Dotkeep does not commit
+> Files over 10 MiB skipped and warned
+> `DOTKEEP_MAX` (MiB) default 10, max 100; above 100 capped and warned
+> GitHub rejects over 100 MiB on push; committed blobs still fail
+> Dotkeep does not commit. Git is yours after the copy
 
 ```sh
 dotkeep check
@@ -194,7 +194,7 @@ help
 
 `NO_COLOR` disables color
 
-`DOTKEEP_MAX` skip limit in MiB, default 10, max 100. Above 100 is capped and warned. GitHub rejects the push
+`DOTKEEP_MAX` skip limit in MiB, default 10, max 100; above 100 capped and warned. GitHub rejects the push
 
 ## License
 
