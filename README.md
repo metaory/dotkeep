@@ -63,7 +63,8 @@ Creates your **state repo**:
 
 > [!TIP]
 >
-> Or skip init: mkdir a dir and write `.dotkeep.conf` yourself
+> Or skip init:
+> mkdir a dir and write `.dotkeep.conf` yourself
 >
 > Next: `cd` into that dir, `dotkeep config`, then `dotkeep backup`
 
@@ -94,9 +95,11 @@ Then asks to open it with `$EDITOR`, else `nvim`, `vim`, `vi`
 >
 > Prefer explicit files over whole dirs
 >
-> Unreadable files are skipped. The rest of the dir is copied
+> Unreadable files are skipped
+> The rest of the dir is copied
 >
-> If both a dir and paths under it are listed, the dir wins and children are dropped
+> If both a dir and paths under it are listed
+> the dir wins and children are dropped
 
 > [!IMPORTANT]
 >
@@ -157,18 +160,23 @@ dotkeep backup
 - Reads `.dotkeep.conf`
 - Copies each listed path from the live system
 - into this repo (`home/` and `root/`)
-- Prompt confirmation before writing
-- If this dir is a git repo: fetch origin, show status, ask before `pull --rebase`
+- Prompt confirmation and write
+- If this dir is a git repo:
+  - fetch origin
+  - show status
+  - Prompt confirmation and `pull --rebase`
 
-> [!NOTE]
+> [!WARNING]
 >
 > Ignored paths under `home/` / `root/` are pruned via `git clean -X`
 >
 > Files over `10 MiB` skipped and warned
 >
-> `DOTKEEP_MAX` (MiB) default `10`, max `100`; above `100` capped and warned
+> `DOTKEEP_MAX` (MiB) default `10`, max `100`
+> above `100` capped and warned
 >
-> GitHub rejects over `100 MiB` on push; **committed blobs still fail**
+> GitHub rejects over `100 MiB` on push
+> **committed blobs still fail**
 
 > [!IMPORTANT]
 >
@@ -192,8 +200,11 @@ dotkeep restore
 
 - Reads `.dotkeep.conf`
 - Copies each listed path from this repo
-- Prompt confirmation before writing
-- If this dir is a git repo: fetch origin, show status, ask before `pull --rebase`
+- Prompt confirmation and write
+- If this dir is a git repo:
+  - fetch origin
+  - show status
+  - Prompt confirmation and `pull --rebase`
 
 > (`home/` and `root/`) onto the live system
 
@@ -214,7 +225,11 @@ cd <state-dir>
 dotkeep restore
 ```
 
-> Prompts to pull `--rebase` when origin is ahead. Default is no. Dirty trees are stashed first.
+> [!INFO]
+>
+> Prompts to pull `--rebase` when origin is ahead
+> Default is no
+> Dirty trees are stashed first
 
 ## Commands
 
