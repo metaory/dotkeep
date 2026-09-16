@@ -19,7 +19,7 @@ ${C2}  $NAME init${r} [DIR]
   ${it}Pick any other dir, then add your own remote${r}
 
 ${it}  Or skip init: mkdir a dir and write ${c6}$DOTCONF${r} yourself${r}
-${it}  Next: ${C2}cd${r} to that dir, edit ${c6}$DOTCONF${r}, then ${c2}$NAME backup${r}
+${it}  Next: ${C2}cd${r} to that dir, ${c2}$NAME config${r}, then ${c2}$NAME backup${r}
 EOF
   ui::divider c8 -
 }
@@ -29,6 +29,7 @@ function help::config {
 ${C3}CONFIG${r}
 ${C2}  $NAME ${c2}config${r}
   Prints the full path to ${c6}$DOTCONF${r} and its contents
+  Then asks to open it with ${C4}\$EDITOR${r}
 
   Plain file. One path per line. ${c7}#${r} comments
   Every entry must start with ${C2}home/${r} or ${C2}root/${r}
@@ -86,18 +87,11 @@ ${C2}  $NAME ${c2}backup${r}
   Files over ${c1}$((MAX / 1048576)) MiB${r} skipped and warned
   ${C4}DOTKEEP_MAX${r} (MiB) ${c3}default 10${r}, ${c3}max 100${r}; above ${b}100${r} capped and warned
   GitHub rejects over ${c3}100 MiB${r} on push; committed blobs still fail
-  ${it}${c3}Dotkeep does not commit.${r} Git is yours after the copy
+  ${it}${c3}Asks before pull, commit, and push.${r} Default is no
 
-  ${C6}workflow${r}
-    ${C60}# validate${r}
-    ${C2}$NAME check${r}
-    ${c60}# machine → repo${r}
-    ${C2}$NAME backup${r}
-    ${c60}# stage${r}
+  ${C6}after a yes${r}
     ${c2}git add -A${r}
-    ${c60}# snapshot${r}
-    ${c2}git commit -m snapshot${r}
-    ${c60}# publish${r}
+    ${c2}git commit -m${r} ${c7}snapshot YYYY-MM-DD HH:MM${r}
     ${c2}git push${r}
 EOF
   ui::divider c8 -
@@ -122,9 +116,7 @@ ${C3}RESTORE${r}
   ${C6}existing clone${r}
     ${c60}# enter your state dir${r}
     ${C2}cd${r} ${c6}<state-dir>${r}
-    ${c60}# update from remote${r}
-    ${c2}git pull${r}
-    ${c60}# repo → machine${r}
+    ${c60}# fetch, then pull --rebase if behind. default no${r}
     ${C2}$NAME restore${r}
 EOF
   ui::divider c8 -
@@ -136,7 +128,7 @@ ${C3}COMMANDS${r}
   ${C2}$NAME ${c2}<command>${r}
 
   ${c2}init${r} [DIR]   create ${it}state repo${r}, ${c6}home/ root/${r} + ${c6}$DOTCONF${r} + ${c6}git${r}
-  ${c2}config${r}       show ${c6}$DOTCONF${r} path + contents
+  ${c2}config${r}       show ${c6}$DOTCONF${r}, offer to edit
   ${c2}check${r}        validate + resolve paths
   ${c2}backup${r}       copy live files into the state repo
   ${c2}restore${r}      copy state repo files onto the live system
@@ -149,6 +141,7 @@ function help::env {
   cat <<EOF
 ${C3}ENV${r}
   ${C4}NO_COLOR${r}     disables color
+  ${C4}EDITOR${r}       used by ${c2}config${r}, else ${c2}nvim${r} ${c2}vim${r} ${c2}vi${r}
   ${C4}DOTKEEP_MAX${r}  skip limit in ${c1}MiB${r}, default ${c1}10${r}, max ${c1}100${r}
                ${it}above ${b}100${r}${it} capped and warned. GitHub rejects the push${r}
 EOF
@@ -157,7 +150,7 @@ EOF
 function help::next {
   cat <<EOF
 ${C3}NEXT${r}
-  1. edit ${c6}$DOTCONF${r}
+  1. ${C2}$NAME config${r}
   2. run  ${C2}$NAME backup${r}
 EOF
 }

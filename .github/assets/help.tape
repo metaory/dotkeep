@@ -8,8 +8,8 @@ Set TypingSpeed 80ms
 Set Shell "bash"
 Set FontSize 24
 Set BorderRadius 20
-Set Width 1085
-Set Height 1100
+Set Width 1086
+Set Height 1140
 Set Margin 0
 #Set MarginFill "#111122"
 Set Padding 20
@@ -18,21 +18,21 @@ Set WindowBar Colorful
 Set WindowBarSize 40
 
 Type "dotkeep"
-Sleep 3s
+Sleep 1s
 Enter
 Hide
 ScrollUp 100
 Show
-Sleep 3s
+Sleep 1s
 ScrollDown@30ms 6 # init
-Sleep 3s
+Sleep 1s
 ScrollDown@30ms 9 # config
-Sleep 3s
-ScrollDown@30ms 33 # where
-Sleep 3s
+Sleep 1s
+ScrollDown@30ms 34 # where
+Sleep 1s
 ScrollDown@30ms 11 # backup
-Sleep 3s
-ScrollDown@30ms 21 # restore
-Sleep 3s
+Sleep 1s
+ScrollDown@30ms 14 # restore
+Sleep 1s
 ScrollDown@30ms 30 # tail
-Sleep 4s
+Sleep 1s

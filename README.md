@@ -65,12 +65,12 @@ Creates your **state repo**:
 >
 > Or skip init: mkdir a dir and write `.dotkeep.conf` yourself
 >
-> Next: `cd` into that dir, edit `.dotkeep.conf`, then `dotkeep backup`
+> Next: `cd` into that dir, `dotkeep config`, then `dotkeep backup`
 
 ```sh
 dotkeep init ~/state
 cd ~/state
-$EDITOR .dotkeep.conf
+dotkeep config
 ```
 
 ## Config
@@ -80,6 +80,8 @@ dotkeep config
 ```
 
 Shows the full path to `.dotkeep.conf` and its contents
+
+Then asks to open it with `$EDITOR`, else `nvim`, `vim`, `vi`
 
 > [!NOTE]
 > Plain file. One path per line. `#` comments
@@ -156,6 +158,7 @@ dotkeep backup
 - Copies each listed path from the live system
 - into this repo (`home/` and `root/`)
 - Prompt confirmation before writing
+- If this dir is a git repo: fetch origin, show status, ask before `pull --rebase`
 
 > [!NOTE]
 >
@@ -169,15 +172,15 @@ dotkeep backup
 
 > [!IMPORTANT]
 >
-> Dotkeep does not commit
+> Asks before pull, commit, and push
 >
-> Git is yours after the copy
+> Default is no. Git is yours unless you say yes
+
+Say yes after the copy and it runs:
 
 ```sh
-dotkeep check
-dotkeep backup
 git add -A
-git commit -m snapshot
+git commit -m "snapshot 2026-09-16 15:40"
 git push
 ```
 
@@ -190,6 +193,7 @@ dotkeep restore
 - Reads `.dotkeep.conf`
 - Copies each listed path from this repo
 - Prompt confirmation before writing
+- If this dir is a git repo: fetch origin, show status, ask before `pull --rebase`
 
 > (`home/` and `root/`) onto the live system
 
@@ -207,9 +211,10 @@ dotkeep restore
 
 ```sh
 cd <state-dir>
-git pull
 dotkeep restore
 ```
+
+> Prompts to pull `--rebase` when origin is ahead. Default is no. Dirty trees are stashed first.
 
 ## Commands
 
@@ -217,7 +222,7 @@ dotkeep restore
 dotkeep <command>
 
 init [DIR]   create state repo (home/ root/ + .dotkeep.conf + git)
-config       show .dotkeep.conf path + contents
+config       show .dotkeep.conf, offer to edit
 check        validate + resolve paths
 backup       copy live files into the state repo
 restore      copy state repo files onto the live system
@@ -227,6 +232,8 @@ help
 ## Env
 
 `NO_COLOR` disables color
+
+`EDITOR` used by `config`, else `nvim` `vim` `vi`
 
 `DOTKEEP_MAX` skip limit in `MiB`, `default 10`, `max 100`
 above `100` capped and warned. GitHub rejects the push

@@ -356,6 +356,17 @@ function ask::yn {
   return 1
 }
 
+# ask::line PROMPT DEFAULT — enter keeps DEFAULT
+function ask::line {
+  local prompt=$1 default=${2-} ans='' tty
+  ask::tty || ui::die "no tty"
+  exec {tty}<>/dev/tty
+  printf '%s%s%s [%s]: ' "$c3" "$prompt" "$r" "$default" >&"$tty"
+  IFS= read -r -u "$tty" ans || true
+  exec {tty}>&-
+  printf '%s' "${ans:-$default}"
+}
+
 #  ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  ┃  TALLY
 #  ┗━━━━━━━━
@@ -714,6 +725,91 @@ function sync::git {
   git -c color.ui=always log --oneline --decorate -5
 }
 
+function git::dirty {
+  [[ -n "$(git status --porcelain)" ]]
+}
+
+function git::behind {
+  git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' &>/dev/null || return 1
+  (($(git rev-list --count 'HEAD..@{upstream}') > 0))
+}
+
+function git::rebasing {
+  [[ -d .git/rebase-merge || -d .git/rebase-apply ]]
+}
+
+function git::fetch {
+  git remote get-url origin &>/dev/null || return 0
+  ui::log step fetch origin
+  git fetch origin || {
+    ui::log warn fetch "failed, continuing local"
+    return 1
+  }
+}
+
+function git::pull_fail {
+  local stashed=$1
+  git::rebasing && git rebase --abort || :
+  [[ $stashed == 1 ]] || ui::die "pull failed"
+  git stash pop || ui::die "stash pop conflict"
+  ui::die "pull failed"
+}
+
+function git::pull {
+  local stashed=0 prompt=' pull --rebase?'
+  git::dirty && prompt=' stash and pull --rebase?'
+  ask::yn "$prompt" || {
+    ui::log info pull skipped
+    return 0
+  }
+  git::dirty && {
+    git stash push -u -m dotkeep
+    stashed=1
+  }
+  git pull --rebase || git::pull_fail "$stashed"
+  [[ $stashed == 1 ]] || return 0
+  git stash pop || ui::die "stash pop conflict"
+}
+
+function git::prep {
+  local fetched=0
+  [[ -d .git ]] || return 0
+  git::fetch && fetched=1
+  printf '\n'
+  git -c color.status=always status -sb
+  printf '\n'
+  [[ $fetched == 1 ]] || return 0
+  git::behind || return 0
+  git::rebasing && {
+    ui::log warn pull "rebase in progress"
+    return 0
+  }
+  git::pull
+}
+
+function git::ship {
+  local msg
+  [[ -d .git ]] || return 0
+  git::dirty || return 0
+  ask::yn " git add -A?" || return 0
+  git add -A
+  git diff --cached --quiet && {
+    ui::log warn add "nothing staged"
+    return 0
+  }
+  msg=$(ask::line " commit" "snapshot $(date +'%Y-%m-%d %H:%M')")
+  git commit -m "$msg" || {
+    ui::log warn commit failed
+    return 0
+  }
+  git remote get-url origin &>/dev/null || {
+    ui::log warn push "no origin"
+    return 0
+  }
+  ask::yn " git push?" || return 0
+  git push || ui::log warn push failed
+}
+
 function sync::run {
   local side=$1
   local -n _es=$2
@@ -721,6 +817,7 @@ function sync::run {
   unset T
   declare -gA T=()
 
+  git::prep
   "help::$side"
   ui::nl
   view::manifest
@@ -750,6 +847,7 @@ function sync::run {
   [[ $side == backup ]] && sync::prune
   tally::end "$side"
   ui::nl
+  [[ $side == backup ]] && git::ship
   [[ $side == backup ]] && sync::git
   ui::nl
   [[ $side == restore && n -gt 0 ]] && ui::log info prior "$bak" || :
@@ -774,7 +872,7 @@ function cmd::init {
 }
 
 function cmd::config {
-  local f=$PWD/$DOTCONF
+  local f=$PWD/$DOTCONF e
   [[ -f $f ]] || {
     help::main
     return
@@ -784,6 +882,11 @@ function cmd::config {
   view::manifest "$f"
   help::syntax
   help::cmds
+  ask::tty && ask::yn " edit $DOTCONF?" || return
+  for e in "${EDITOR-}" nvim vim vi; do
+    command -v "$e" >/dev/null && exec "$e" "$f"
+  done
+  ui::fatal "no editor" "nvim, vim, or vi"
 }
 
 function cmd::check {
