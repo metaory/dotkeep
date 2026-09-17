@@ -225,7 +225,7 @@ cd <state-dir>
 dotkeep restore
 ```
 
-> [!INFO]
+> [!NOTE]
 >
 > Prompts to pull `--rebase` when origin is ahead
 > Default is no
