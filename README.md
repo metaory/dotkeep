@@ -10,7 +10,6 @@
   <a href="#install">Install</a> ·
   <a href="#init">Init</a> ·
   <a href="#config">Config</a> ·
-  <a href="#why">Why</a> ·
   <a href="#backup">Backup</a> ·
   <a href="#restore">Restore</a>
 </p>
@@ -46,6 +45,19 @@ ln -s "$(realpath dotkeep)" /your/path/dir/dotkeep
 
 # or we handle it
 sudo ln -s "$(realpath dotkeep)" /usr/local/bin/dotkeep
+```
+
+## Commands
+
+```
+dotkeep <command>
+
+init [DIR]   create state repo (home/ root/ + .dotkeep.conf + git)
+config       show .dotkeep.conf, offer to edit
+check        validate + resolve paths
+backup       copy live files into the state repo
+restore      copy state repo files onto the live system
+help
 ```
 
 ## Init
@@ -275,19 +287,6 @@ dotkeep restore
 > Prompts to pull `--rebase` when origin is ahead
 > Default is no
 > Dirty trees are stashed first
-
-## Commands
-
-```
-dotkeep <command>
-
-init [DIR]   create state repo (home/ root/ + .dotkeep.conf + git)
-config       show .dotkeep.conf, offer to edit
-check        validate + resolve paths
-backup       copy live files into the state repo
-restore      copy state repo files onto the live system
-help
-```
 
 ## Env
 
