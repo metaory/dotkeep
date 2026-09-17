@@ -10,6 +10,7 @@
   <a href="#install">Install</a> ·
   <a href="#init">Init</a> ·
   <a href="#config">Config</a> ·
+  <a href="#why">Why</a> ·
   <a href="#backup">Backup</a> ·
   <a href="#restore">Restore</a>
 </p>
@@ -144,6 +145,50 @@ root/etc/hosts
 home/.zshrc       is  $HOME/.zshrc
 root/etc/hosts    is  /etc/hosts
 ```
+
+## Why
+
+**One file.** `.dotkeep.conf` is the source of truth
+
+One path per line, `home/` or `root/`
+
+Edit that file to add or drop a path
+
+**State tree.** The backup dir looks like the live system:
+
+```
+home/.zshrc
+home/.config/nvim
+root/etc/hosts
+```
+
+Same names. Same nesting. Home and root in one list
+
+**Copies.** `backup` and `restore` rsync both ways. Live paths stay regular files
+
+**Ask first.** Both commands ask before writing. Restore parks live targets under `/tmp/dotkeep.XXXXXX/` first. A bad path is skipped. The rest is copied
+
+**Git optional.** The store is that file tree. After a copy it asks to commit and push. Default is no. Syncthing or a disk copy can hold the same tree
+
+### Compared with
+
+**bare git, yadm.** Store is `$HOME`. Live files are the work tree. `git add -A` can commit SSH keys and caches. `/etc` does not fit
+
+**Stow, rcm, homeshick, dotbot.** Store is the repo. Live path is a symlink. An editor that writes a tempfile and renames it over the path replaces the link. The repo keeps the old file
+
+**chezmoi, dotdrop.** Store is the repo. Live path is a copy. Names are `dot_zshrc` and templates. Use them for per-host files or encrypted secrets
+
+**dotkeep.** Store is `home/` and `root/` in a separate dir. Live path is a copy. Names match the disk
+
+### Limits
+
+**Platform.** Linux, bash 5, git, rsync, GNU coreutils. No Windows
+
+**Root.** The tool does not call `sudo`. Restoring `root/` needs write access to that path
+
+**Skip.** Symlinks (leaf and nested). Files over `10 MiB` (`DOTKEEP_MAX`, cap `100`)
+
+**Out of scope.** Templates, encryption, per-host source
 
 ## Where
 
