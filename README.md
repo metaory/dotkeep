@@ -56,8 +56,16 @@ dotkeep init [DIR]
 
 Creates your **state repo**:
 
-- `home/`, `root/`,
-- empty `.dotkeep.conf`,
+```
+state/
+├── .dotkeep.conf
+├── .gitignore
+├── home/
+└── root/
+```
+
+- `mkdir` `home/`, `root/`
+- `touch` `.dotkeep.conf`
 - a default `.gitignore`
 - `git init`
 
@@ -142,14 +150,6 @@ root/etc/hosts    is  /etc/hosts
 `config` / `check` / `backup` / `restore` run from **your state dir**
 
 (the one with `.dotkeep.conf`). Not the tool install. Any path, any remote
-
-```
-state/
-├── .dotkeep.conf
-├── .gitignore
-├── home/
-└── root/
-```
 
 ## Backup
 
