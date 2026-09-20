@@ -36,14 +36,14 @@ readonly LIB=${SCRIPT%/*}/lib
 # shellcheck source=lib/help
 source "$LIB/help"
 
-# type → "prefix colorVar"
+# type → "level colorVar"
 declare -A LOG=(
-  [ok]='⇒ C2'
-  [info]=':> c33'
-  [warn]='!! C3'
-  [err]='✗✗ C1'
-  [step]='=> C6'
-  [path]='·> C2'
+  [ok]='parent C2'
+  [info]='child C4'
+  [warn]='warn C2'
+  [err]='parent C1'
+  [step]='parent C2'
+  [path]='child C4'
 )
 
 function str::trim {
@@ -82,25 +82,30 @@ readonly border_color=$c8
 # DETAIL parts join with →
 # empty TITLE skips the title column
 function ui::log {
-  local type=$1 title=${2-} spec pre cn fd=1
+  local type=$1 title=${2-} spec level cn pre fd=1
   shift 2 || true
-  spec=${LOG[$type]-'·· c7'}
-  pre=${spec%% *}
+  spec=${LOG[$type]-'child c7'}
+  level=${spec%% *}
   cn=${spec##* }
   local -n col=$cn
+  case $level in
+  parent | warn) pre='==>' ;;
+  child) pre='  ->' ;;
+  esac
   [[ $type == err ]] && fd=2
   {
-    printf '%s%-2s%s' "$col" "$pre" "$r"
-    [[ $title ]] && printf ' %s%-5s%s' "$col" "$title" "$r"
-    (($#)) && printf '  %s%s' "$c7" "$1" && shift
+    printf '%s%s' "$col" "$pre"
+    [[ $level != warn ]] && printf '%s' "$r"
+    [[ $title ]] && printf ' %s' "$title"
+    (($#)) && printf '  %s' "$1" && shift
     local x
-    for x; do printf ' %s→%s %s%s' "$c7" "$r" "$c6" "$x"; done
+    for x; do printf ' ->%s' "$x"; done
     printf '%s\n' "$r"
   } >&"$fd"
 }
 
 function ui::next {
-  printf '  %s%s%s\n' "$c3" "$1" "$r"
+  printf '%s->%s %s\n' "$C4" "$r" "$1"
 }
 
 function ui::divider {
@@ -482,7 +487,7 @@ function size::rows {
 function size::warn {
   local b p
   while IFS=$'\t' read -r b p; do
-    ui::log warn size "${c1}$(size::mib "$b")${r}"
+    ui::log warn size "$(size::mib "$b")"
     ui::next "$p"
     tally large
   done < <(size::rows "$@")
@@ -499,7 +504,7 @@ function size::history {
       ((sz > MAX)) || continue
       note='in history'
       ((sz > PUSH)) && note='in history, push will reject'
-      ui::log warn size "${c1}$(size::mib "$sz")${r}" "$note"
+      ui::log warn size "$(size::mib "$sz")" "$note"
       ui::next "${path:-$oid}"
     done || :
 }
@@ -591,12 +596,11 @@ function sync::preview {
     ui::log info 'saving backups' 'in' "${c3}/tmp/$NAME.XXXXXX/"
     ;;
   esac
-  ui::nl
   while IFS=$'\t' read -r e fs repo; do
     sync::ends "$side" "$e" "$fs" "$repo" src dst from to
     why=
     sync::skip "$src" "$dst" "$side" why && {
-      ui::log warn ' skip' "${c1}$why" "${c3}$from"
+      ui::log warn "${C3}skip${C2}" "$why" "$from"
       continue
     }
     ((++n))
@@ -903,13 +907,13 @@ function cmd::check {
       continue
     }
     [[ -e $fs ]] || {
-      ui::log warn miss "${C3}missing on machine"
+      ui::log warn miss "missing on machine"
       tally miss
       continue
     }
     size::warn "$fs" "$e"
     [[ -e $repo ]] || {
-      ui::log warn miss "${C3}missing in repo"
+      ui::log warn miss "missing in repo"
       tally miss
       continue
     }
