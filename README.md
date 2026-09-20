@@ -16,7 +16,7 @@
 
 <div align="center">
 
-[help.webm](https://github.com/user-attachments/assets/4e83065d-294f-4222-8bfc-8c1f6a65e437)
+[help.webm](https://github.com/user-attachments/assets/3cd57b4e-3d81-454b-a949-55938a64345c)
 
 </div>
 
