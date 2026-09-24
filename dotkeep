@@ -720,6 +720,27 @@ function sync::prune {
   git clean -Xdfq -- home root
 }
 
+# rewrite state-repo README with tree snapshot
+function sync::readme {
+  {
+    printf '%s\n' \
+      '# dotkeep' \
+      '' \
+      'State repo managed by [dotkeep](https://github.com/metaory/dotkeep).' \
+      '' \
+      "Generated \`$(date +'%Y-%m-%d %H:%M')\`." \
+      '' \
+      "Manifest: \`$DOTCONF\`" \
+      '' \
+      '## Tree' \
+      '' \
+      '```'
+    tree -a -I '.git' --noreport .
+    printf '%s\n' '```'
+  } >README.md
+  ui::log ok readme README.md
+}
+
 function sync::git {
   [[ -d .git ]] || return 0
   printf '\n'
@@ -849,6 +870,7 @@ function sync::run {
   done < <(conf::pairs "${_es[@]}")
 
   [[ $side == backup ]] && sync::prune
+  [[ $side == backup ]] && sync::readme
   tally::end "$side"
   ui::nl
   [[ $side == backup ]] && git::ship

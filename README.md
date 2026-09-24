@@ -78,9 +78,16 @@ state/
 ```
 
 - `mkdir` `home/`, `root/`
-- `touch` `.dotkeep.conf`
+- empty `.dotkeep.conf`
 - a default `.gitignore`
 - `git init`
+
+Remote is **optional**. Add one yourself when you want push/pull:
+
+```sh
+cd ~/state
+git remote add origin <url>
+```
 
 > [!TIP]
 >
@@ -180,7 +187,7 @@ Same names. Same nesting. Home and root in one list
 
 **Ask first.** Both commands ask before writing. Restore parks live targets under `/tmp/dotkeep.XXXXXX/` first. A bad path is skipped. The rest is copied
 
-**Git optional.** The store is that file tree. After a copy it asks to commit and push. Default is no. Syncthing or a disk copy can hold the same tree
+**Git optional.** The store is that file tree. After backup it asks to add, commit, and push (each opt-in, default no). Syncthing or a disk copy can hold the same tree
 
 ### Compared with
 
@@ -214,18 +221,30 @@ Same names. Same nesting. Home and root in one list
 dotkeep backup
 ```
 
-- Reads `.dotkeep.conf`
-- Copies each listed path from the live system
-- into this repo (`home/` and `root/`)
-- Prompt confirmation and write
-- If this dir is a git repo:
-  - fetch origin
-  - show status
-  - Prompt confirmation and `pull --rebase`
+Run from your **state dir**. Flow:
+
+1. **Git prep** _(optional; skipped if no `.git`)_
+   - `fetch` origin if configured (fetch failure → continue local)
+   - show status
+   - if behind: ask `pull --rebase` (stash first if dirty). Default **no**
+2. Show manifest + preview (`machine → repo`)
+3. Ask before write. Default **no** → abort
+4. Copy each listed path into `home/` / `root/`
+5. Prune ignored paths under `home/` / `root/` via `git clean -X` _(if git)_
+6. Rewrite `README.md` with a `tree` snapshot of the state repo
+7. **Git ship** _(optional; only if `.git` and the tree is dirty)_
+   - ask `git add -A` (default **no**)
+   - ask commit message (default `snapshot YYYY-MM-DD HH:MM`)
+   - ask `git push` if `origin` exists (default **no**; warn and skip if no remote)
+8. Show short status + last 5 commits _(if git)_
+
+> [!IMPORTANT]
+>
+> Pull, add, commit, and push are all opt-in. Default is no.
+> Git itself is optional. No remote means no push prompt.
+> A disk copy or Syncthing can hold the same tree.
 
 > [!WARNING]
->
-> Ignored paths under `home/` / `root/` are pruned via `git clean -X`
 >
 > Files over `10 MiB` skipped and warned
 >
@@ -233,20 +252,14 @@ dotkeep backup
 > above `100` capped and warned
 >
 > GitHub rejects over `100 MiB` on push
-> **committed blobs still fail**
+> **committed blobs still fail** (history is scanned and warned)
 
-> [!IMPORTANT]
->
-> Asks before pull, commit, and push
->
-> Default is no. Git is yours unless you say yes
-
-Say yes after the copy and it runs:
+After yes on ship:
 
 ```sh
 git add -A
 git commit -m "snapshot 2026-09-16 15:40"
-git push
+git push   # only if origin exists and you say yes
 ```
 
 ## Restore
@@ -255,17 +268,17 @@ git push
 dotkeep restore
 ```
 
-- Reads `.dotkeep.conf`
-- Copies each listed path from this repo
-- Prompt confirmation and write
-- If this dir is a git repo:
-  - fetch origin
-  - show status
-  - Prompt confirmation and `pull --rebase`
+Run from your **state dir**. Flow:
 
-> (`home/` and `root/`) onto the live system
+1. Same **git prep** as backup _(optional; fetch + ask pull if behind)_
+2. Show manifest + preview (`repo → machine`)
+3. Ask before write. Default **no** → abort
+4. Copy existing live targets to `/tmp/dotkeep.XXXXXX/` first
+5. Prune ignored paths under state `home/` / `root/` _(if git)_
+6. Copy each listed path onto the live system (`rsync --delete` under those paths)
+7. Print the safety bak path when anything was saved
 
-> Existing live targets backups go to `/tmp/dotkeep.XXXXXX/` first
+No commit or push on restore.
 
 ### New machine:
 
@@ -284,9 +297,10 @@ dotkeep restore
 
 > [!NOTE]
 >
-> Prompts to pull `--rebase` when origin is ahead
-> Default is no
-> Dirty trees are stashed first
+> Pull is opt-in when origin is ahead. Default is no.
+> Dirty trees are stashed before pull, then popped.
+> `--delete` means extras under a listed dir on the live side are removed.
+> Prior live copies stay under `/tmp/dotkeep.XXXXXX/` until you clear them.
 
 ## Env
 

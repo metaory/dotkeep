@@ -82,17 +82,20 @@ function help::backup {
   cat <<EOF
 ${C3}BACKUP${r}
 ${C2}  $NAME ${c2}backup${r}
-  Reads ${c6}$DOTCONF${r} Copies each listed path from the live system
-  into this repo (${c6}home/${r} and ${c6}root/${r}) Asks before writing
+  ${c6}1.${r} git prep ${it}(optional)${r}: fetch, status, ask pull if behind
+  ${c6}2.${r} preview ${c3}machine → repo${r}, ask before write
+  ${c6}3.${r} copy listed paths into ${c6}home/${r} ${c6}root/${r}
+  ${c6}4.${r} prune ignored via ${c2}git clean -X${r}, rewrite ${c6}README.md${r} tree
+  ${c6}5.${r} git ship ${it}(optional)${r}: ask add, commit, push
   Files over ${c1}$((MAX / 1048576)) MiB${r} skipped and warned
   ${C4}DOTKEEP_MAX${r} (MiB) ${c3}default 10${r}, ${c3}max 100${r}; above ${b}100${r} capped and warned
   GitHub rejects over ${c3}100 MiB${r} on push; committed blobs still fail
-  ${it}${c3}Asks before pull, commit, and push.${r} Default is no
+  ${it}${c3}Pull, add, commit, push are opt-in.${r} Default is no. No origin → no push
 
-  ${C6}after a yes${r}
+  ${C6}after yes on ship${r}
     ${c2}git add -A${r}
     ${c2}git commit -m${r} ${c7}snapshot YYYY-MM-DD HH:MM${r}
-    ${c2}git push${r}
+    ${c2}git push${r} ${c7}# if origin exists${r}
 EOF
   ui::divider c8 -
 }
@@ -101,9 +104,11 @@ function help::restore {
   cat <<EOF
 ${C3}RESTORE${r}
   ${C2}$NAME ${c2}restore${r}
-  Reads ${c6}$DOTCONF${r} Copies each listed path from this repo
-  (${c6}home/${r} and ${c6}root/${r}) onto the live system. Asks before writing
-  Existing live targets go to ${C2}/tmp/$NAME.XXXXXX/${r} first
+  ${c6}1.${r} same git prep as backup ${it}(optional pull)${r}
+  ${c6}2.${r} preview ${c3}repo → machine${r}, ask before write
+  ${c6}3.${r} live targets → ${C2}/tmp/$NAME.XXXXXX/${r} first
+  ${c6}4.${r} prune ignored in state, then copy ${it}(rsync --delete)${r}
+  No commit or push on restore
 
   ${C6}new machine${r}
     ${c60}# clone your state repo${r}
