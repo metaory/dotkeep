@@ -1,0 +1,38 @@
+# shellcheck shell=bash disable=SC2154
+
+# why string → tally key
+declare -A WHY=(
+  [symlink]=symlink
+  ['not on machine']=miss
+  ['not in state']=miss
+  ['same path']=same
+  ['dest outside state']=outside
+  ['type mismatch']=clash
+)
+
+function tally { ((++T[$1])); }
+
+function tally::reset {
+  unset T
+  declare -gA T=()
+}
+
+function tally::add { ((T[$1] += $2)); }
+
+function tally::why { tally "${WHY[$1]:-skip}"; }
+
+function tally::end {
+  local cmd=$1 k n
+  local -a rows=("key"$'\t'"count")
+  for k in done diff large skip some unreadable symlink miss clash same outside fail partial; do
+    n=${T[$k]:-0}
+    ((n)) || continue
+    rows+=("$k"$'\t'"$n")
+  done
+  ((${#rows[@]} > 1)) || rows+=("done"$'\t'"0")
+  ui::nl
+  gum style --foreground 212 --bold -- "$cmd"
+  printf '%s\n' "${rows[@]}" | ui::table
+}
+
+# vim: ft=bash

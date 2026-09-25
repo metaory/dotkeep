@@ -14,8 +14,8 @@ function help::init {
   cat <<EOF
 ${C3}INIT${r}
 ${C2}  $NAME init${r} [DIR]
-  Creates your ${it}state repo${r}: 
-    ${c6}home/${r} ${c6}root/${r} + empty ${c6}$DOTCONF${r} + ${c6}.gitignore${r} + ${c6}git init${r}
+  Creates your ${it}state dir${r}:
+    ${c6}home/${r} ${c6}root/${r} + empty ${c6}$DOTCONF${r} + ${c6}.gitignore${r} + ${c2}git init${r} ${it}(if git)${r}
   ${it}Pick any other dir, then add your own remote${r}
 
 ${it}  Or skip init: mkdir a dir and write ${c6}$DOTCONF${r} yourself${r}
@@ -36,8 +36,12 @@ ${C2}  $NAME ${c2}config${r}
   No ${c1}~${r}, no absolute ${c1}/${r} forms, no ${c1}\$VAR${r} expansion
   Prefer explicit files over whole dirs
   Unreadable files are skipped. The rest of the dir is copied
-  Symlinks, nested ${c6}.git/${r} and ${c6}node_modules${r} stripped 
-  ${c6}.gitignore${r} is respected
+  Backup may ${c2}chmod u+r${r} on unreadable files you own first
+  Symlinks as live source skipped on backup; restore may replace a live symlink with a copy
+  Nested ${c6}.git/${r} and ${c6}node_modules${r} stripped
+  ${c6}.gitignore${r} pruned after backup ${it}(if git: ${c2}git clean -X${r})${r}
+  Preview/check: content delta vs live FS ${it}(not git)${r};
+  notes ${c3}+N ~N -N${r}; dirty → ${c2}diff${r}; identical → ${c3}same${r}
 
 EOF
 }
@@ -82,11 +86,14 @@ function help::backup {
   cat <<EOF
 ${C3}BACKUP${r}
 ${C2}  $NAME ${c2}backup${r}
-  ${c6}1.${r} git prep ${it}(optional)${r}: fetch, status, ask pull if behind
-  ${c6}2.${r} preview ${c3}machine → repo${r}, ask before write
-  ${c6}3.${r} copy listed paths into ${c6}home/${r} ${c6}root/${r}
-  ${c6}4.${r} prune ignored via ${c2}git clean -X${r}, rewrite ${c6}README.md${r} tree
-  ${c6}5.${r} git ship ${it}(optional)${r}: ask add, commit, push
+  ${c6}1.${r} git prep ${it}(optional; skipped if no git / no .git)${r}: fetch, status, ask pull if behind
+  ${c6}2.${r} preview ${c3}machine → state${r} ${it}(content delta +N ~N -N; identical dropped)${r}
+  ${c6}3.${r} pick paths? ${c2}Some${r} / ${c2}All${r} ${it}(All = all diffs)${r}
+     ${it}Some → multi-select, then preview selection again${r}
+  ${c6}4.${r} ask before write
+  ${c6}5.${r} copy listed paths into ${c6}home/${r} ${c6}root/${r}
+  ${c6}6.${r} prune ignored ${it}(if git)${r} via ${c2}git clean -X${r}, rewrite ${c6}README.md${r} tree
+  ${c6}7.${r} git ship ${it}(optional; if git + dirty)${r}: ask add, commit, push
   Files over ${c1}$((MAX / 1048576)) MiB${r} skipped and warned
   ${C4}DOTKEEP_MAX${r} (MiB) ${c3}default 10${r}, ${c3}max 100${r}; above ${b}100${r} capped and warned
   GitHub rejects over ${c3}100 MiB${r} on push; committed blobs still fail
@@ -104,10 +111,14 @@ function help::restore {
   cat <<EOF
 ${C3}RESTORE${r}
   ${C2}$NAME ${c2}restore${r}
-  ${c6}1.${r} same git prep as backup ${it}(optional pull)${r}
-  ${c6}2.${r} preview ${c3}repo → machine${r}, ask before write
-  ${c6}3.${r} live targets → ${C2}/tmp/$NAME.XXXXXX/${r} first
-  ${c6}4.${r} prune ignored in state, then copy ${it}(rsync --delete)${r}
+  ${c6}1.${r} same git prep as backup ${it}(optional; skipped if no git / no .git)${r}
+  ${c6}2.${r} preview ${c3}state → machine${r} ${it}(content delta; identical dropped; may replace live symlink)${r}
+  ${c6}3.${r} pick paths? ${c2}Some${r} / ${c2}All${r} ${it}(All = all diffs)${r}
+     ${it}Some → multi-select, then preview selection again${r}
+  ${c6}4.${r} ask before write
+  ${c6}5.${r} live targets → ${C2}/tmp/$NAME.XXXXXX/${r} first
+  ${c6}6.${r} prune ignored in state ${it}(if git)${r}, then copy ${it}(rsync --delete)${r}
+  ${c6}7.${r} print safety bak path when anything was saved
   No commit or push on restore
 
   ${C6}new machine${r}
@@ -115,7 +126,7 @@ ${C3}RESTORE${r}
     ${c2}git clone${r} ${c7}<url>${r} ${c6}<state-dir>${r}
     ${c60}# enter that clone${r}
     ${C2}cd${r} ${c6}<state-dir>${r}
-    ${c60}# repo → machine${r}
+    ${c60}# state → machine${r}
     ${C2}$NAME restore${r}
 
   ${C6}existing clone${r}
@@ -132,11 +143,11 @@ function help::cmds {
 ${C3}COMMANDS${r}
   ${C2}$NAME ${c2}<command>${r}
 
-  ${c2}init${r} [DIR]   create ${it}state repo${r}, ${c6}home/ root/${r} + ${c6}$DOTCONF${r} + ${c6}git${r}
+  ${c2}init${r} [DIR]   create state dir: ${c6}home/ root/${r} + ${c6}$DOTCONF${r} + ${c6}.gitignore${r} + ${c2}git init${r} ${it}(if git)${r}
   ${c2}config${r}       show ${c6}$DOTCONF${r}, offer to edit
-  ${c2}check${r}        validate + resolve paths
-  ${c2}backup${r}       copy live files into the state repo
-  ${c2}restore${r}      copy state repo files onto the live system
+  ${c2}check${r}        validate paths + content delta vs state
+  ${c2}backup${r}       copy live files into the state tree
+  ${c2}restore${r}      copy state tree files onto the live system
   ${c2}help${r}
 EOF
   ui::divider c8 -
@@ -149,6 +160,13 @@ ${C3}ENV${r}
   ${C4}EDITOR${r}       used by ${c2}config${r}, else ${c2}nvim${r} ${c2}vim${r} ${c2}vi${r}
   ${C4}DOTKEEP_MAX${r}  skip limit in ${c1}MiB${r}, default ${c1}10${r}, max ${c1}100${r}
                ${it}above ${b}100${r}${it} capped and warned. GitHub rejects the push${r}
+  ${C4}DOTKEEP_DRY${r}  ${c1}1${r} = dry-run (same as ${c2}--dry-run${r})
+
+  ${C3}FLAGS${r} ${it}(after command)${r}
+  ${c2}--dry-run${r}    rsync --dry-run; no mkdir / git writes
+               ${it}e.g. ${c2}$NAME backup --dry-run${r}
+
+  Prompts use ${c2}gum${r} (${c2}input${r}, ${c2}choose${r}, ${c2}log${r}, ${c2}style${r}, ${c2}table${r}, ${c2}pager${r})
 EOF
 }
 
@@ -172,14 +190,18 @@ function help::guide_empty {
 }
 
 function help::main {
-  help::intro
-  help::cmds
-  help::init
-  help::howto
-  help::layout
-  help::backup
-  help::restore
-  help::env
+  local body
+  body=$(
+    help::intro
+    help::cmds
+    help::init
+    help::howto
+    help::layout
+    help::backup
+    help::restore
+    help::env
+  )
+  ui::out "$body"
 }
 
 # vim: ft=bash

@@ -24,7 +24,9 @@
 
 ## Install
 
-Needs `bash`, `git`, `rsync`, `tree`, `tput`, `sed`, and GNU coreutils
+Needs `bash`, `git`, `rsync`, `tree`, `tput`, `sed`, GNU coreutils, and [gum](https://github.com/charmbracelet/gum)
+
+If `gum` is missing, `dotkeep` offers to install it: `pacman -S gum` when pacman exists, otherwise a GitHub release binary into `~/.local/bin`
 
 > [!IMPORTANT]
 >
@@ -37,6 +39,7 @@ git clone https://github.com/metaory/dotkeep
 cd dotkeep
 ```
 
+Layout: `dotkeep` is the control script (vars, flags, dispatch). Logic lives under `lib/` (`gum`, `ui`, `help`, `path`, `conf`, `size`, `git`, `tally`, `sync`).
 Then put it on PATH:
 
 ```sh
@@ -50,7 +53,7 @@ sudo ln -s "$(realpath dotkeep)" /usr/local/bin/dotkeep
 ## Commands
 
 ```
-dotkeep <command>
+dotkeep <command> [--dry-run]
 
 init [DIR]   create state repo (home/ root/ + .dotkeep.conf + git)
 config       show .dotkeep.conf, offer to edit
@@ -126,18 +129,25 @@ Then asks to open it with `$EDITOR`, else `nvim`, `vim`, `vi`
 > Unreadable files are skipped
 > The rest of the dir is copied
 >
+> Backup may `chmod u+r` on unreadable files you own first
+>
 > If both a dir and paths under it are listed
 > the dir wins and children are dropped
 
 > [!IMPORTANT]
 >
-> `symlinks` are skipped (leaf and nested)
+> Live **source** symlinks are skipped on backup (leaf)
+>
+> Restore may replace a live symlink with a regular copy from the repo
 >
 > `devices`, `fifos`, and `sockets` are not synced
 >
 > Nested `.git` and `node_modules` are stripped _(content only, not repo metadata)_
 >
 > Directory sync respects the state dir `.gitignore`
+>
+> Preview/check compare **repo ↔ live FS** content (`rsync -c`), not git status
+> Notes look like `+2 ~1 -0` (added / changed / deleted); dirty → `diff`; identical → `same`
 
 Copy [dotkeep.conf.sample](dotkeep.conf.sample) or start from `dotkeep init`:
 
@@ -185,7 +195,7 @@ Same names. Same nesting. Home and root in one list
 
 **Copies.** `backup` and `restore` rsync both ways. Live paths stay regular files
 
-**Ask first.** Both commands ask before writing. Restore parks live targets under `/tmp/dotkeep.XXXXXX/` first. A bad path is skipped. The rest is copied
+**Ask first.** Both commands ask before writing (default no). Optional path pick via `gum choose` (default no = all ok). Restore parks live targets under `/tmp/dotkeep.XXXXXX/` first. Missing parent dirs on the live side are created (`mkdir -p`). A bad path is skipped. The rest is copied
 
 **Git optional.** The store is that file tree. After backup it asks to add, commit, and push (each opt-in, default no). Syncthing or a disk copy can hold the same tree
 
@@ -201,11 +211,13 @@ Same names. Same nesting. Home and root in one list
 
 ### Limits
 
-**Platform.** Linux, bash 5, git, rsync, GNU coreutils. No Windows
+**Platform.** Linux, bash 5, git, rsync, gum, GNU coreutils. No Windows
 
 **Root.** The tool does not call `sudo`. Restoring `root/` needs write access to that path
 
-**Skip.** Symlinks (leaf and nested). Files over `10 MiB` (`DOTKEEP_MAX`, cap `100`)
+**Skip.** Live source symlinks on backup. Files over `10 MiB` (`DOTKEEP_MAX`, cap `100`). Restore may replace a live symlink with a copy.
+
+**Preview.** Content delta vs live FS (`rsync -c`), not git. Dirty → `diff` with `+N ~N -N`; identical → `same`
 
 **Out of scope.** Templates, encryption, per-host source
 
@@ -227,16 +239,17 @@ Run from your **state dir**. Flow:
    - `fetch` origin if configured (fetch failure → continue local)
    - show status
    - if behind: ask `pull --rebase` (stash first if dirty). Default **no**
-2. Show manifest + preview (`machine → repo`)
-3. Ask before write. Default **no** → abort
-4. Copy each listed path into `home/` / `root/`
-5. Prune ignored paths under `home/` / `root/` via `git clean -X` _(if git)_
-6. Rewrite `README.md` with a `tree` snapshot of the state repo
-7. **Git ship** _(optional; only if `.git` and the tree is dirty)_
+2. Show manifest + preview (`machine → state`); content delta notes; identical paths dropped
+3. Optional **pick a subset** _(**no** keeps all)_ via `gum choose` (multi-select: `x` toggles, enter confirms; all start selected)
+4. Ask before write. Default **no** → abort
+5. Copy each listed path into `home/` / `root/`
+6. Prune ignored paths under `home/` / `root/` via `git clean -X` _(if git)_
+7. Rewrite `README.md` with a `tree` snapshot of the state repo
+8. **Git ship** _(optional; only if `.git` and the tree is dirty)_
    - ask `git add -A` (default **no**)
    - ask commit message (default `snapshot YYYY-MM-DD HH:MM`)
    - ask `git push` if `origin` exists (default **no**; warn and skip if no remote)
-8. Show short status + last 5 commits _(if git)_
+9. Show short status + last 5 commits _(if git)_
 
 > [!IMPORTANT]
 >
@@ -271,12 +284,13 @@ dotkeep restore
 Run from your **state dir**. Flow:
 
 1. Same **git prep** as backup _(optional; fetch + ask pull if behind)_
-2. Show manifest + preview (`repo → machine`)
-3. Ask before write. Default **no** → abort
-4. Copy existing live targets to `/tmp/dotkeep.XXXXXX/` first
-5. Prune ignored paths under state `home/` / `root/` _(if git)_
-6. Copy each listed path onto the live system (`rsync --delete` under those paths)
-7. Print the safety bak path when anything was saved
+2. Show manifest + preview (`state → machine`); content delta notes; identical paths dropped; live symlinks may be replaced with copies
+3. Optional **pick a subset** _(**no** keeps all)_ via `gum choose` (multi-select: `x` toggles, enter confirms; all start selected)
+4. Ask before write. Default **no** → abort
+5. Copy existing live targets to `/tmp/dotkeep.XXXXXX/` first
+6. Prune ignored paths under state `home/` / `root/` _(if git)_
+7. Copy each listed path onto the live system (`rsync --delete` under those paths; parents created with `mkdir -p`)
+8. Print the safety bak path when anything was saved
 
 No commit or push on restore.
 
@@ -310,6 +324,17 @@ dotkeep restore
 
 `DOTKEEP_MAX` skip limit in `MiB`, `default 10`, `max 100`
 above `100` capped and warned. GitHub rejects the push
+
+`DOTKEEP_DRY=1` same as `--dry-run` (rsync dry-run; no mkdir / git writes)
+
+Flags come **after** the command:
+
+```sh
+dotkeep backup --dry-run
+dotkeep restore --dry-run
+```
+
+Prompts use [gum](https://github.com/charmbracelet/gum) (`confirm`, `input`, `choose`, `log`, `style`, `table`, `pager`)
 
 ## License
 

@@ -1,0 +1,104 @@
+# shellcheck shell=bash disable=SC2154
+
+readonly GUM_REPO=https://github.com/charmbracelet/gum
+readonly GUM_LATEST=$GUM_REPO/releases/latest
+readonly GUM_BIN_DIR=${HOME}/.local/bin
+readonly GUM_TAG_SED='s/\r//;s|^location:.*/tag/(v[^[:space:]]*).*|\1|Ip'
+
+function gum::arch {
+  case $(uname -m) in
+  x86_64) printf 'x86_64' ;;
+  aarch64 | arm64) printf 'arm64' ;;
+  *) return 1 ;;
+  esac
+}
+
+function gum::install_bin {
+  local arch tag ver url tmp
+  arch=$(gum::arch) || {
+    printf '%s: unsupported arch for gum binary\n' "$NAME" >&2
+    return 1
+  }
+  command -v curl >/dev/null || {
+    printf '%s: need curl to fetch gum\n' "$NAME" >&2
+    return 1
+  }
+  tag=$(curl -fsSIL "$GUM_LATEST" | sed -En "$GUM_TAG_SED" | head -1)
+  [[ $tag ]] || return 1
+  ver=${tag#v}
+  url="$GUM_REPO/releases/download/${tag}/gum_${ver}_Linux_${arch}.tar.gz"
+  tmp=$(mktemp -d)
+  curl -fsSL "$url" | tar -xz -C "$tmp" gum
+  mkdir -p "$GUM_BIN_DIR"
+  mv -f "$tmp/gum" "$GUM_BIN_DIR/gum"
+  chmod +x "$GUM_BIN_DIR/gum"
+  rm -rf "$tmp"
+  export PATH="$GUM_BIN_DIR:$PATH"
+}
+
+# gum missing → raw TTY ask
+function gum::ask {
+  local prompt=$1 ans=
+  printf '%s' "$prompt" >&2
+  read -r -n 1 ans </dev/tty || true
+  printf '\n' >&2
+  [[ $ans == [yY] ]]
+}
+
+function gum::ensure {
+  export PATH="$GUM_BIN_DIR:$PATH"
+  command -v gum >/dev/null && return 0
+  printf '%s: gum not found\n' "$NAME" >&2
+  command -v pacman >/dev/null && {
+    gum::ask ' install via pacman? [y/N] ' && sudo pacman -S --needed gum
+    command -v gum >/dev/null
+    return
+  }
+  gum::ask " install gum to $GUM_BIN_DIR? [y/N] " && gum::install_bin
+  command -v gum >/dev/null
+}
+
+function gum::env {
+  local cols
+  cols=$(tput cols 2>/dev/null) || cols=80
+  ((cols > 0)) || cols=80
+  export COLUMNS=$cols
+  export GUM_SPIN_SPINNER="${GUM_SPIN_SPINNER:-dot}"
+  export GUM_SPIN_TITLE_FOREGROUND="${GUM_SPIN_TITLE_FOREGROUND:-212}"
+  export GUM_CHOOSE_CURSOR_FOREGROUND="${GUM_CHOOSE_CURSOR_FOREGROUND:-212}"
+  export GUM_CHOOSE_SELECTED_FOREGROUND="${GUM_CHOOSE_SELECTED_FOREGROUND:-212}"
+  export GUM_CHOOSE_HEADER_FOREGROUND="${GUM_CHOOSE_HEADER_FOREGROUND:-99}"
+  export GUM_TABLE_BORDER_FOREGROUND="${GUM_TABLE_BORDER_FOREGROUND:-99}"
+  export GUM_TABLE_HEADER_FOREGROUND="${GUM_TABLE_HEADER_FOREGROUND:-212}"
+  export GUM_TABLE_CELL_FOREGROUND="${GUM_TABLE_CELL_FOREGROUND:-252}"
+  export GUM_LOG_LEVEL_FOREGROUND="${GUM_LOG_LEVEL_FOREGROUND:-39}"
+  export GUM_LOG_MESSAGE_FOREGROUND="${GUM_LOG_MESSAGE_FOREGROUND:-252}"
+  [[ ${NO_COLOR-} ]] && export CLICOLOR=0
+  return 0
+}
+
+# plain spinner: gum spin (bubbletea v2) leaks DECRQM ?2026/?2027 replies
+# https://github.com/charmbracelet/bubbletea/issues/1627
+function gum::spin {
+  local title=$1 rc=0 pid i=0 out
+  local -a frames=(⣾ ⣽ ⣻ ⢿ ⡿ ⣟ ⣯ ⣷)
+  shift
+  [[ -t 2 ]] || {
+    "$@"
+    return
+  }
+  out=$(mktemp)
+  "$@" >"$out" 2>&1 &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    printf '\r\033[K%s %s' "${frames[i++ % ${#frames[@]}]}" "$title" >&2
+    sleep 0.1
+  done
+  wait "$pid" || rc=$?
+  printf '\r\033[K' >&2
+  ((rc)) && [[ -s $out ]] && cat "$out" >&2
+  rm -f "$out"
+  return "$rc"
+}
+
+# vim: ft=bash

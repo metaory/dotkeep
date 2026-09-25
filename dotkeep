@@ -1,5 +1,5 @@
 #!/bin/bash
-# shellcheck disable=SC2154
+# shellcheck disable=SC2154,SC2034
 set -Eeuo pipefail
 
 NAME=dotkeep
@@ -7,11 +7,13 @@ DOTCONF=.$NAME.conf
 ROOT=
 MANIFEST=
 UNREAD=0
+DRY=0
 # skip over this; DOTKEEP_MAX (MiB) raises it, capped at GitHub's 100 MiB
 MAX=$((10 * 1024 * 1024))
 PUSH=$((100 * 1024 * 1024))
+readonly BEAT=2
 # Du+w: a source dir without u+w must not make rsync skip every file in it
-RSYNC=(rsync -rptgo --no-owner --no-group --chmod=Du+w --exclude=.git --exclude=node_modules)
+RSYNC=(rsync -rlptgo -c --no-owner --no-group --chmod=Du+w --exclude=.git --exclude=node_modules --exclude=__pycache__)
 declare -A T=()
 
 ((BASH_VERSINFO[0] >= 5)) || {
@@ -19,981 +21,105 @@ declare -A T=()
   exit 1
 }
 
-for bin in basename cat dirname git mkdir mktemp readlink realpath rsync sed sort tput tree; do
+for bin in basename cat cmp curl dirname mkdir mktemp readlink realpath rsync sed sort tar tput tree; do
   command -v "$bin" >/dev/null && continue
+  # curl/tar only needed for gum binary install; soft-warn later in gum::ensure
+  [[ $bin == curl || $bin == tar ]] && continue
   printf '%s: missing command: %s\n' "$NAME" "$bin" >&2
   exit 1
 done
+# git optional: prep/ship/prune skipped when missing or no .git
+command -v git >/dev/null || printf '%s: git not found (git features disabled)\n' "$NAME" >&2
 
 SCRIPT=$(readlink -f "${BASH_SOURCE[0]}")
 readonly LIB=${SCRIPT%/*}/lib
 
-[[ -r $LIB/help ]] || {
-  printf '%s\n' "$NAME: incomplete installation: $LIB/help" >&2
+[[ -r $LIB/gum && -r $LIB/ui && -r $LIB/help && -r $LIB/path && -r $LIB/conf && -r $LIB/size && -r $LIB/git && -r $LIB/tally && -r $LIB/sync ]] || {
+  printf '%s\n' "$NAME: incomplete installation: $LIB" >&2
   exit 1
 }
 
+# shellcheck source=lib/gum
+source "$LIB/gum"
+# shellcheck source=lib/ui
+source "$LIB/ui"
 # shellcheck source=lib/help
 source "$LIB/help"
+# shellcheck source=lib/path
+source "$LIB/path"
+# shellcheck source=lib/conf
+source "$LIB/conf"
+# shellcheck source=lib/size
+source "$LIB/size"
+# shellcheck source=lib/git
+source "$LIB/git"
+# shellcheck source=lib/tally
+source "$LIB/tally"
+# shellcheck source=lib/sync
+source "$LIB/sync"
 
-# type → "level colorVar"
-declare -A LOG=(
-  [ok]='parent C2'
-  [info]='child C4'
-  [warn]='warn C2'
-  [err]='parent C1'
-  [step]='parent C2'
-  [path]='child C4'
-)
-
-function str::trim {
-  local s=$1
-  s=${s#"${s%%[![:space:]]*}"}
-  printf '%s' "${s%"${s##*[![:space:]]}"}"
-}
-
-#  ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  ┃  UI
-#  ┗━━━━━━
-
-function ui::nl { printf '\n'; }
-
-function ui::palette {
-  local i
-  r=
-  it=
-  for i in {0..255}; do
-    printf -v "c$i" ''
-    printf -v "C$i" ''
-  done
-  [[ -t 1 && -z ${NO_COLOR:-} ]] || return 0
-  for i in {1..255}; do
-    printf -v "c$i" '\033[38;5;%sm' "$i"
-    printf -v "C$i" '\033[38;5;%s;1m' "$i"
-  done
-  r=$'\033[0m'
-  b=$'\033[1m'
-  it=$'\033[3m'
-}
-ui::palette
-readonly border_color=$c8
-
-# ui::log TYPE TITLE [DETAIL...]
-# DETAIL parts join with →
-# empty TITLE skips the title column
-function ui::log {
-  local type=$1 title=${2-} spec level cn pre fd=1
-  shift 2 || true
-  spec=${LOG[$type]-'child c7'}
-  level=${spec%% *}
-  cn=${spec##* }
-  local -n col=$cn
-  case $level in
-  parent | warn) pre='==>' ;;
-  child) pre='  ->' ;;
-  esac
-  [[ $type == err ]] && fd=2
-  {
-    printf '%s%s' "$col" "$pre"
-    [[ $level != warn ]] && printf '%s' "$r"
-    [[ $title ]] && printf ' %s' "$title"
-    (($#)) && printf '  %s' "$1" && shift
-    local x
-    for x; do printf ' ->%s' "$x"; done
-    printf '%s\n' "$r"
-  } >&"$fd"
-}
-
-function ui::next {
-  printf '%s->%s %s\n' "$C4" "$r" "$1"
-}
-
-function ui::divider {
-  local colr="${1:-c5}"
-  local char="${2:-─}"
-  local word="${3:-}"
-  local len="$(($(tput cols) - ${#word} - 2))"
-  local left="$((len / 2))"
-  local right="$((len - left))"
-  colr="${!colr-}"
-  printf '%*s %s %*s\n' "$left" '' "${c57-}$word${r}" "$right" '' |
-    sed "s/ /${colr}$char/g"
-}
-
-function ui::fatal {
-  local msg=$1 tip=${2-}
-  ui::nl
-  ui::divider c1 ━
-  {
-    [[ $c1 ]] && printf '\n  \033[48;5;197;38;5;16;1m ✗✗  %s \033[0m\n' "$msg"
-    [[ $c1 ]] || printf '\n  ✗✗  %s \n' "$msg"
-    [[ $tip ]] && printf '\n%s tip:%s  %s%s%s\n' "$c6" "$r" "$c3" "$tip" "$r"
-  } >&2
+gum::ensure || {
+  printf '%s: install gum (pacman -S gum) or see %s\n' "$NAME" "$GUM_REPO" >&2
   exit 1
 }
-
-function ui::die {
-  ui::fatal "$*" "$NAME help"
-}
-
-function ui::error {
-  local code=$1 line=$2 cmd=$3
-  trap - ERR
-  ui::fatal "command failed ($code): $cmd" "line $line"
-}
-
-function ui::paint {
-  local line
-  line=$(str::trim "${1%$'\r'}")
-  case $line in
-  home/*) printf '%s%s%s/%s%s' "$c2" home "$c6" "${line#home/}" "$border_color" ;;
-  root/*) printf '%s%s%s/%s%s' "$c2" root "$c6" "${line#root/}" "$border_color" ;;
-  '#'*) printf '%s%s' "${C60}" "$line$border_color" ;;
-  '') printf '%s' "$border_color" ;;
-  *) printf '%s%s' "$c7" "$line$border_color" ;;
-  esac
-}
-
-#  ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  ┃  VIEW
-#  ┗━━━━━━━━
-
-function view::bars {
-  local s
-  printf -v s '%*s' "$1" ''
-  printf '%s' "${s// /━}"
-}
-
-# width = title + dashes + 5, widened to body + 4
-function view::measure {
-  local -n _w=$1 _d=$2
-  local title=$3 body=$4
-  _d=1
-  _w=$((${#title} + _d + 5))
-  ((_w >= body + 4)) && return 0
-  _w=$((body + 4))
-  _d=$((_w - ${#title} - 5))
-}
-
-function view::open {
-  local top
-  top=$(view::bars "$3")
-  printf '  %s┏━ %s%s%s %s┓%s\n' "$border_color" "$2" "$1" "$border_color" "$top" "$r"
-}
-
-function view::close {
-  local bot
-  bot=$(view::bars $(($1 - 2)))
-  printf '  %s┗%s┛%s\n' "$border_color" "$bot" "$r"
-}
-
-# view::config TITLE LINE... — box render (help sample, config, backup/restore)
-function view::config {
-  local title=$1 line vis pad i width dashes llen=0
-  shift
-  local -a lines=("$@") vises=()
-  for line in "${lines[@]}"; do
-    vis=$(str::trim "${line%$'\r'}")
-    vises+=("$vis")
-    ((${#vis} > llen)) && llen=${#vis}
-  done
-  view::measure width dashes "$title" "$llen"
-  view::open "$title" "$c1" "$dashes"
-  for i in "${!lines[@]}"; do
-    pad=$(printf '%*s' $((width - 4 - ${#vises[i]})) '')
-    printf '  %s┃ %s%s ┃%s\n' "$border_color" "$(ui::paint "${lines[i]}")" "$pad" "$r"
-  done
-  view::close "$width"
-}
-
-# view::manifest [TITLE] — load $MANIFEST into the shared box
-function view::manifest {
-  local title=${1:-$MANIFEST}
-  local -a lines=()
-  mapfile -t lines <"$MANIFEST"
-  view::config "$title" "${lines[@]}"
-}
-
-#  ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  ┃  PATH
-#  ┗━━━━━━━━
-
-function path::trim {
-  printf '%s\n' "$(str::trim "${1%%#*}")"
-}
-
-function path::norm {
-  local IFS=/ p
-  local -a out=()
-  for p in $1; do
-    case $p in
-    '' | .) ;;
-    ..)
-      ((${#out[@]} > 1)) || return 1
-      unset 'out[-1]'
-      ;;
-    *) out+=("$p") ;;
-    esac
-  done
-  ((${#out[@]} >= 2)) || return 1
-  [[ ${out[0]} == home || ${out[0]} == root ]] || return 1
-  IFS=/
-  printf '%s\n' "${out[*]}"
-}
-
-function path::resolve {
-  case $1 in
-  home/*) printf '%s/%s\n' "$HOME" "${1#home/}" ;;
-  root/*) printf '/%s\n' "${1#root/}" ;;
-  *) return 1 ;;
-  esac
-}
-
-function path::canon {
-  local n
-  [[ $1 != *['$~']* ]] || ui::die "forbidden char in: $1"
-  n=$(path::norm "$1") || ui::die "invalid path: $1"
-  printf '%s\n' "$n"
-}
-
-# keep parents, drop children; order in manifest does not matter
-function path::overlap {
-  local -n _paths=$1
-  local -a s=() keep=()
-  ((${#_paths[@]} < 2)) && return 0
-  mapfile -t s < <(printf '%s\n' "${_paths[@]}" | sort)
-  local -A drop=()
-  local p parent=
-  for p in "${s[@]}"; do
-    [[ $parent && $p == "$parent"/* ]] && {
-      drop[$p]=$parent
-      continue
-    }
-    parent=$p
-  done
-  ((${#drop[@]})) || return 0
-  for p in "${_paths[@]}"; do
-    [[ -v drop[$p] ]] && {
-      ui::log warn drop "$p" "under ${drop[$p]}"
-      continue
-    }
-    keep+=("$p")
-  done
-  _paths=("${keep[@]}")
-}
-
-function path::clash {
-  [[ -e $1 && -e $2 ]] || return 1
-  [[ (-d $1 && -f $2) || (-f $1 && -d $2) ]]
-}
-
-#  ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  ┃  CONF
-#  ┗━━━━━━━━
-
-function conf::discover {
-  local f=$PWD/$DOTCONF
-  [[ -f $f ]] || {
-    help::main
-    ui::fatal "no ./$DOTCONF" "$NAME init"
-  }
-  MANIFEST=$f
-  ROOT=$(dirname "$f")
-}
-
-function conf::read {
-  [[ -f $MANIFEST ]] || ui::die "missing manifest at $MANIFEST"
-  local line
-  while IFS= read -r line || [[ $line ]]; do
-    line=$(path::trim "$line")
-    [[ $line ]] && printf '%s\n' "$line"
-  done <"$MANIFEST"
-}
-
-function conf::parse {
-  local -n _out=$1
-  local raw n
-  local -A seen=()
-  _out=()
-  for raw in "${@:2}"; do
-    [[ $raw ]] || continue
-    n=$(path::canon "$raw")
-    [[ -v seen[$n] ]] && continue
-    seen[$n]=1
-    _out+=("$n")
-  done
-  path::overlap "$1"
-}
-
-function conf::entries {
-  local -n _e=$1
-  local -a raws=()
-  mapfile -t raws < <(conf::read)
-  conf::parse "$1" "${raws[@]}"
-  ((${#_e[@]})) || {
-    help::guide_empty
-    ui::fatal "manifest is empty" "edit $MANIFEST  then  $NAME backup"
-  }
-}
-
-function conf::pairs {
-  local e
-  for e; do printf '%s\t%s\t%s\n' "$e" "$(path::resolve "$e")" "$ROOT/$e"; done
-}
-
-#  ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  ┃  ASK
-#  ┗━━━━━━━
-
-function ask::tty { [[ -t 0 || -r /dev/tty ]]; }
-
-function ask::yn {
-  local ans='' tty
-  ask::tty || ui::die "no tty"
-  exec {tty}<>/dev/tty
-  printf '%s%s%s %s[y/N]%s ' "$c3" "$1" "$r" "$C2" "$r" >&"$tty"
-  IFS= read -r -n 1 -u "$tty" ans || true
-  printf '\n' >&"$tty"
-  exec {tty}>&-
-  case $ans in
-  [yY]) return 0 ;;
-  esac
-  return 1
-}
-
-# ask::line PROMPT DEFAULT — enter keeps DEFAULT
-function ask::line {
-  local prompt=$1 default=${2-} ans='' tty
-  ask::tty || ui::die "no tty"
-  exec {tty}<>/dev/tty
-  printf '%s%s%s [%s]: ' "$c3" "$prompt" "$r" "$default" >&"$tty"
-  IFS= read -r -u "$tty" ans || true
-  exec {tty}>&-
-  printf '%s' "${ans:-$default}"
-}
-
-#  ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  ┃  TALLY
-#  ┗━━━━━━━━
-
-# why string → tally key
-declare -A WHY=(
-  [symlink]=symlink
-  ['not on machine']=miss
-  ['not in repo']=miss
-  ['same path']=same
-  ['dest outside repo']=outside
-  ['type mismatch']=clash
-)
-
-function tally { ((++T[$1])); }
-
-function tally::add { ((T[$1] += $2)); }
-
-function tally::why { tally "${WHY[$1]:-skip}"; }
-
-function tally::color {
-  case $1 in
-  ok) printf '%s' "$c2" ;;
-  clash) printf '%s' "$c1" ;;
-  *) printf '%s' "$C3" ;;
-  esac
-}
-
-function tally::end {
-  local cmd=$1 k n col tc=$c2
-  local -a keys=() ns=()
-  local kw=0 nw=0 i width dashes llen pad kgap ngap
-  for k in ok large skip some unreadable symlink miss clash same outside; do
-    n=${T[$k]:-0}
-    ((n)) || continue
-    keys+=("$k")
-    ns+=("$n")
-    ((${#k} > kw)) && kw=${#k}
-    ((${#n} > nw)) && nw=${#n}
-  done
-  ((${#keys[@]})) || {
-    keys=(ok)
-    ns=(0)
-    kw=2
-    nw=1
-  }
-  ((${T[clash]:-0})) && tc=$c1
-  llen=$((kw + 2 + nw))
-  view::measure width dashes "$cmd" "$llen"
-  ui::nl
-  view::open "$cmd" "$tc" "$dashes"
-  for i in "${!keys[@]}"; do
-    k=${keys[i]}
-    n=${ns[i]}
-    col=$(tally::color "$k")
-    pad=$(printf '%*s' $((width - 4 - llen)) '')
-    kgap=$(printf '%*s' $((kw - ${#k})) '')
-    ngap=$(printf '%*s' $((nw - ${#n})) '')
-    printf "  %s┃ %s%s%s  %s%s%s%s%s ${border_color}┃%s\n" \
-      "$border_color" "$col" "$k" "$kgap" "$col" "$ngap" "$n" "$pad" "$r"
-  done
-  view::close "$width"
-}
-
-#  ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  ┃  SIZE
-#  ┗━━━━━━━━
-
-function size::mib {
-  printf '%d.%02d MiB' $(($1 / 1048576)) $((($1 % 1048576) * 100 / 1048576))
-}
-
-# DOTKEEP_MAX in MiB. Above GitHub's reject, warn and cap.
-function size::limit {
-  local n=${DOTKEEP_MAX:-} cap=$((PUSH / 1048576))
-  [[ $n ]] || return 0
-  [[ $n =~ ^[0-9]+$ ]] || {
-    ui::log warn size "DOTKEEP_MAX=$n" "ignored, using $((MAX / 1048576)) MiB"
-    return 0
-  }
-  ((${#n} > 3 || 10#$n > cap)) && {
-    ui::log warn size "DOTKEEP_MAX=$n" "GitHub rejects over $cap MiB, using $cap"
-    n=$cap
-  }
-  ((10#$n < 1)) && {
-    ui::log warn size "DOTKEEP_MAX=$n" "ignored, using $((MAX / 1048576)) MiB"
-    return 0
-  }
-  MAX=$((10#$n * 1024 * 1024))
-}
-
-# size::scan ROOT — bytes<TAB>path for regular files over MAX
-function size::scan {
-  local b p
-  [[ -e $1 && ! -L $1 ]] || return 0
-  find "$1" -type f -printf '%s\t%p\n' 2>/dev/null | while IFS=$'\t' read -r b p; do
-    ((b <= MAX)) && continue
-    printf '%s\t%s\n' "$b" "$p"
-  done || :
-}
-
-# size::rows ROOT LABEL — bytes<TAB>display, label plus path under ROOT
-function size::rows {
-  local root=$1 label=$2 b p rel
-  while IFS=$'\t' read -r b p; do
-    rel=${p#"$root"}
-    rel=${rel#/}
-    [[ $rel ]] && rel="/$rel"
-    printf '%s\t%s\n' "$b" "$label$rel"
-  done < <(size::scan "$root")
-}
-
-function size::warn {
-  local b p
-  while IFS=$'\t' read -r b p; do
-    ui::log warn size "$(size::mib "$b")"
-    ui::next "$p"
-    tally large
-  done < <(size::rows "$@")
-}
-
-function size::history {
-  local type sz oid path note
-  [[ -d .git ]] || return 0
-  git rev-list --objects --all 2>/dev/null |
-    git cat-file --batch-check='%(objecttype) %(objectsize) %(objectname) %(rest)' |
-    while read -r type sz oid path; do
-      [[ $type == blob ]] || continue
-      [[ $sz =~ ^[0-9]+$ ]] || continue
-      ((sz > MAX)) || continue
-      note='in history'
-      ((sz > PUSH)) && note='in history, push will reject'
-      ui::log warn size "$(size::mib "$sz")" "$note"
-      ui::next "${path:-$oid}"
-    done || :
-}
-
-# size::exclude SRC DST — drop repo leftovers; tally only ones preview missed
-function size::exclude {
-  local src=$1 dst=$2 b p rel removed=0
-  local -A hit=()
-  [[ -e $dst && ! -L $dst ]] || return 0
-  while IFS=$'\t' read -r b p; do
-    rel=${p#"$src"}
-    rel=${rel#/}
-    hit[${rel:-.}]=1
-  done < <(size::scan "$src")
-  while IFS=$'\t' read -r b p; do
-    rel=${p#"$dst"}
-    rel=${rel#/}
-    rm -f -- "$p"
-    ((++removed))
-    [[ -v hit[${rel:-.}] ]] || tally large
-  done < <(size::scan "$dst")
-  ((removed)) || return 0
-  ui::log warn size "dropped $removed" "over $((MAX / 1048576)) MiB"
-}
-
-#  ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  ┃  SYNC
-#  ┗━━━━━━━━
-
-# sync  (order ≈ sync::run call chain)
-function sync::ends {
-  local side=$1 e=$2 fs=$3 repo=$4
-  local -n _src=$5 _dst=$6 _from=$7 _to=$8
-  case $side in
-  backup)
-    _src=$fs
-    _dst=$repo
-    _from=$fs
-    _to=repo/$e
-    ;;
-  restore)
-    _src=$repo
-    _dst=$fs
-    _from=repo/$e
-    _to=$fs
-    ;;
-  esac
-}
-
-# sync::skip SRC DST SIDE WHY_NAMEREF — 0 = skip (sets why), 1 = usable
-function sync::skip {
-  local src=$1 dst=$2 side=$3
-  local -n _why=$4
-  [[ -L $src ]] && {
-    _why=symlink
-    return 0
-  }
-  [[ -e $src ]] || {
-    case $side in
-    backup) _why='not on machine' ;;
-    restore) _why='not in repo' ;;
-    esac
-    return 0
-  }
-  [[ $(sync::canon "$src") != "$(sync::canon "$dst")" ]] || {
-    _why='same path'
-    return 0
-  }
-  [[ $side != backup ]] || sync::in_repo "$dst" || {
-    _why='dest outside repo'
-    return 0
-  }
-  path::clash "$src" "$dst" && {
-    _why='type mismatch'
-    return 0
-  }
-  return 1
-}
-
-function sync::preview {
-  local side=$1
-  shift
-  local e fs repo src dst from to why n=0
-  ui::nl
-  case $side in
-  backup) ui::log step backup "machine → repo ${c3}($# paths)" ;;
-  restore)
-    ui::log step restore "repo → machine ${c3}($# paths)"
-    ui::log info 'saving backups' 'in' "${c3}/tmp/$NAME.XXXXXX/"
-    ;;
-  esac
-  while IFS=$'\t' read -r e fs repo; do
-    sync::ends "$side" "$e" "$fs" "$repo" src dst from to
-    why=
-    sync::skip "$src" "$dst" "$side" why && {
-      ui::log warn "${C3}skip${C2}" "$why" "$from"
-      continue
-    }
-    ((++n))
-    case $side in
-    backup)
-      ui::log path '' "$from"
-      size::warn "$src" "$e"
-      ;;
-    restore) ui::log info '' "$to" ;;
-    esac
-  done < <(conf::pairs "$@")
-  [[ $side == backup ]] && size::history
-  ui::nl
-  ((n)) || ui::fatal "no valid sources" "fix $MANIFEST or create the missing paths"
-}
-
-# owned + unreadable cannot be copied; +r is enough and we leave it
-function sync::readable {
-  find "$1" -type f -uid "$UID" ! -readable -exec chmod u+r {} + 2>/dev/null || :
-}
-
-# paths rsync cannot open, relative to SRC, anchored
-function sync::unreadable {
-  [[ -d $1 ]] || return 0
-  find "$1" -mindepth 1 \
-    \( -type d \( ! -readable -o ! -executable \) -prune -printf '/%P\n' \) -o \
-    \( -type f ! -readable -printf '/%P\n' \) \
-    2>/dev/null || :
-}
-
-# dest dirs need u+w during the copy; put source dir modes back after
-function sync::modes {
-  local src=$1 dst=$2 mode path rel
-  [[ -d $src && -d $dst ]] || return 0
-  while IFS= read -r -d '' path; do
-    mode=$(stat -c %a -- "$path")
-    rel=${path#"$src"}
-    rel=${rel#/}
-    chmod -- "$mode" "$dst${rel:+/$rel}" 2>/dev/null || :
-  done < <(find "$src" -type d -print0 2>/dev/null || :)
-}
-
-function sync::canon { realpath -m "$1"; }
-
-# dest must stay inside the state repo even if a symlink points at /etc or $HOME
-function sync::in_repo {
-  local here to
-  here=$(sync::canon .)
-  to=$(sync::canon "$1")
-  [[ $to == "$here"/home/* || $to == "$here"/root/* ]]
-}
-
-function sync::path {
-  local src=$1 dst=$2 side=${3-} rc=0 err skip tail=
-  local -a extra=() lines=() opts=("${RSYNC[@]}")
-  UNREAD=0
-  [[ $side == restore ]] && opts+=(--delete)
-  [[ $side == backup ]] && opts+=(--max-size="$MAX")
-  mkdir -p "$(dirname "$dst")"
-  sync::readable "$src"
-  skip=$(sync::unreadable "$src")
-  [[ $skip ]] && {
-    mapfile -t lines <<<"$skip"
-    extra=("${lines[@]/#/--exclude=}")
-    UNREAD=${#lines[@]}
-    ui::log warn some "$src" "$UNREAD unreadable"
-  }
-  [[ -d $src ]] && {
-    mkdir -p "$dst"
-    tail=/
-  }
-  err=$("${opts[@]}" "${extra[@]}" "$src$tail" "$dst$tail" 2>&1) || rc=$?
-  # 0 ok, 23 partial, 24 vanished mid-transfer; one denied file is not a failed dir
-  case $rc in
-  0 | 23 | 24)
-    sync::modes "$src" "$dst"
-    [[ $side == backup ]] && size::exclude "$src" "$dst"
-    return 0
-    ;;
-  esac
-  [[ $err ]] && printf '%s\n' "$err" >&2
-  return "$rc"
-}
-
-function sync::safety {
-  ui::nl
-  local -n _safe=$1
-  local -n _bak=$2
-  local -n _n=$3
-  local e fs repo
-  _bak=$(mktemp -d /tmp/"$NAME".XXXXXX)
-  _n=0
-  ui::log step backup "$_bak"
-  while IFS=$'\t' read -r e fs repo; do
-    [[ -L $fs || ! -e $fs ]] && continue
-    path::clash "$fs" "$repo" && continue
-    sync::path "$fs" "$_bak/$e"
-    ui::log info bak "$_bak/$e"
-    ((++_n))
-  done < <(conf::pairs "${_safe[@]}")
-  ((_n)) && ui::log ok backup "$_n paths" "$_bak"
-  ((_n)) || ui::log warn safety "nothing on machine to bak"
-  ui::nl
-}
-
-function sync::one {
-  local side=$1 src=$2 dst=$3 from=$4 to=$5
-  case $side in
-  backup) ui::log path '' "${c6}$from" ;;
-  restore) ui::log info '' "${c2}$to" ;;
-  esac
-  sync::path "$src" "$dst" "$side"
-}
-
-function sync::prune {
-  [[ -d .git ]] || return 0
-  git clean -Xdfq -- home root
-}
-
-# rewrite state-repo README with tree snapshot
-function sync::readme {
-  {
-    printf '%s\n' \
-      '# dotkeep' \
-      '' \
-      'State repo managed by [dotkeep](https://github.com/metaory/dotkeep).' \
-      '' \
-      "Generated \`$(date +'%Y-%m-%d %H:%M')\`." \
-      '' \
-      "Manifest: \`$DOTCONF\`" \
-      '' \
-      '## Tree' \
-      '' \
-      '```'
-    tree -a -I '.git' --noreport .
-    printf '%s\n' '```'
-  } >README.md
-  ui::log ok readme README.md
-}
-
-function sync::git {
-  [[ -d .git ]] || return 0
-  printf '\n'
-  git -c color.status=always status -sb
-  git rev-parse --verify HEAD >/dev/null 2>&1 || return 0
-  printf '\n'
-  git -c color.ui=always log --oneline --decorate -5
-}
-
-function git::dirty {
-  [[ -n "$(git status --porcelain)" ]]
-}
-
-function git::behind {
-  git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' &>/dev/null || return 1
-  (($(git rev-list --count 'HEAD..@{upstream}') > 0))
-}
-
-function git::rebasing {
-  [[ -d .git/rebase-merge || -d .git/rebase-apply ]]
-}
-
-function git::fetch {
-  git remote get-url origin &>/dev/null || return 0
-  ui::log step fetch origin
-  git fetch origin || {
-    ui::log warn fetch "failed, continuing local"
-    return 1
-  }
-}
-
-function git::pull_fail {
-  local stashed=$1
-  git::rebasing && git rebase --abort || :
-  [[ $stashed == 1 ]] || ui::die "pull failed"
-  git stash pop || ui::die "stash pop conflict"
-  ui::die "pull failed"
-}
-
-function git::pull {
-  local stashed=0 prompt=' pull --rebase?'
-  git::dirty && prompt=' stash and pull --rebase?'
-  ask::yn "$prompt" || {
-    ui::log info pull skipped
-    return 0
-  }
-  git::dirty && {
-    git stash push -u -m dotkeep
-    stashed=1
-  }
-  git pull --rebase || git::pull_fail "$stashed"
-  [[ $stashed == 1 ]] || return 0
-  git stash pop || ui::die "stash pop conflict"
-}
-
-function git::prep {
-  local fetched=0
-  [[ -d .git ]] || return 0
-  git::fetch && fetched=1
-  printf '\n'
-  git -c color.status=always status -sb
-  printf '\n'
-  [[ $fetched == 1 ]] || return 0
-  git::behind || return 0
-  git::rebasing && {
-    ui::log warn pull "rebase in progress"
-    return 0
-  }
-  git::pull
-}
-
-function git::ship {
-  local msg
-  [[ -d .git ]] || return 0
-  git::dirty || return 0
-  ask::yn " git add -A?" || return 0
-  git add -A
-  git diff --cached --quiet && {
-    ui::log warn add "nothing staged"
-    return 0
-  }
-  msg=$(ask::line " commit" "snapshot $(date +'%Y-%m-%d %H:%M')")
-  git commit -m "$msg" || {
-    ui::log warn commit failed
-    return 0
-  }
-  git remote get-url origin &>/dev/null || {
-    ui::log warn push "no origin"
-    return 0
-  }
-  ask::yn " git push?" || return 0
-  git push || ui::log warn push failed
-}
-
-function sync::run {
-  local side=$1
-  local -n _es=$2
-  local e fs repo src dst from to bak='' n=0 why
-  unset T
-  declare -gA T=()
-
-  git::prep
-  "help::$side"
-  ui::nl
-  view::manifest
-  sync::preview "$side" "${_es[@]}"
-
-  ask::yn " are you sure?" || ui::die "aborted"
-
-  [[ $side == restore ]] && sync::safety "$2" bak n
-  [[ $side == restore ]] && sync::prune
-
-  while IFS=$'\t' read -r e fs repo; do
-    sync::ends "$side" "$e" "$fs" "$repo" src dst from to
-    why=
-    sync::skip "$src" "$dst" "$side" why && {
-      tally::why "$why"
-      continue
-    }
-    sync::one "$side" "$src" "$dst" "$from" "$to"
-    ((UNREAD)) && {
-      tally some
-      tally::add unreadable "$UNREAD"
-      continue
-    }
-    tally ok
-  done < <(conf::pairs "${_es[@]}")
-
-  [[ $side == backup ]] && sync::prune
-  [[ $side == backup ]] && sync::readme
-  tally::end "$side"
-  ui::nl
-  [[ $side == backup ]] && git::ship
-  [[ $side == backup ]] && sync::git
-  ui::nl
-  [[ $side == restore && n -gt 0 ]] && ui::log info prior "$bak" || :
-}
-
-#  ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  ┃  CMD
-#  ┗━━━━━━━
-
-function cmd::init {
-  local dir=${1:-.}
-  dir=${dir%/}
-  mkdir -p "$dir/home" "$dir/root"
-  [[ -e $dir/$DOTCONF ]] || : >"$dir/$DOTCONF"
-  [[ -e $dir/.gitignore ]] || cat "$LIB/gitignore" >"$dir/.gitignore"
-  [[ -d $dir/.git ]] || git -C "$dir" init -q
-  ui::log ok init "$dir" "$dir/$DOTCONF"
-  printf '\n'
-  tree -aC -I '.git' -L 6 --noreport "$dir"
-  printf '\n'
-  help::guide_init "$dir"
-}
-
-function cmd::config {
-  local f=$PWD/$DOTCONF e
-  [[ -f $f ]] || {
-    help::main
-    return
-  }
-  MANIFEST=$f
-  help::config
-  view::manifest "$f"
-  help::syntax
-  help::cmds
-  ask::tty && ask::yn " edit $DOTCONF?" || return
-  for e in "${EDITOR-}" nvim vim vi; do
-    command -v "$e" >/dev/null && exec "$e" "$f"
-  done
-  ui::fatal "no editor" "nvim, vim, or vi"
-}
-
-function cmd::check {
-  local es=() e fs repo
-  unset T
-  declare -gA T=()
-  conf::entries es
-  while IFS=$'\t' read -r e fs repo; do
-    ui::log step path "${c2}$fs"
-    ui::log info keep "${c33}$e"
-    [[ -L $fs ]] && {
-      ui::log warn skip symlink
-      tally symlink
-      continue
-    }
-    [[ -e $fs ]] || {
-      ui::log warn miss "missing on machine"
-      tally miss
-      continue
-    }
-    size::warn "$fs" "$e"
-    [[ -e $repo ]] || {
-      ui::log warn miss "missing in repo"
-      tally miss
-      continue
-    }
-    path::clash "$fs" "$repo" && {
-      ui::log err type "type mismatch"
-      tally clash
-      continue
-    }
-    tally ok
-  done < <(conf::pairs "${es[@]}")
-  size::history
-  tally::end check
-  ((${T[clash]:-0})) || return 0
-  exit 1
-}
-
-function cmd::sync {
-  local es=()
-  conf::entries es
-  sync::run "$1" es
-}
-
-#  ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  ┃  INIT
-#  ┗━━━━━━━━
+gum::env
 
 trap 'ui::error "$?" "$LINENO" "$BASH_COMMAND"' ERR
 
 size::limit
 
+[[ ${DOTKEEP_DRY-} == 1 ]] && DRY=1
+
 cmd=${1:-help}
 shift || true
+
 case $cmd in
 help | -h | --help)
   help::main
-  exit
+  exit 0
   ;;
 init)
   cmd::init "$@"
-  exit
+  exit 0
   ;;
 config)
+  (($#)) && ui::die "unexpected arg: $1 (try: $NAME help)"
   cmd::config
-  exit
+  exit 0
   ;;
-check | backup | restore) ;;
+check | backup | restore)
+  while (($#)); do
+    case $1 in
+    --dry-run)
+      DRY=1
+      shift
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -*) ui::die "unknown flag: $1 (try: $NAME help)" ;;
+    *) ui::die "unexpected arg: $1 (flags after command, e.g. $NAME backup --dry-run)" ;;
+    esac
+  done
+  ;;
 *) ui::die "unknown command: $cmd (try: $NAME help)" ;;
 esac
 
 conf::discover
 
 cfg=$(basename "$MANIFEST")
-
 cd "$ROOT"
 ROOT=.
 MANIFEST=./$cfg
 
 case $cmd in
-check) cmd::check "$@" ;;
-*) cmd::sync "$cmd" "$@" ;;
+check) cmd::check ;;
+*)
+  es=()
+  conf::entries es
+  sync::run "$cmd" es
+  ;;
 esac
+
+# vim: ft=bash

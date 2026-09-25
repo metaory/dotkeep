@@ -1,0 +1,412 @@
+# shellcheck shell=bash disable=SC2154
+
+function ask::tty { [[ -t 0 || -r /dev/tty ]]; }
+
+# gum interrupt (ctrl+c) → exit whole job; plain no/esc stays return 1
+function ask::struck {
+  (($1 >= 128)) && ui::die "aborted"
+}
+
+# ask::yn PROMPT [YES_L] [NO_L] [YES_BG] [NO_BG] — focused bg; other gray
+function ask::yn {
+  ask::tty || return 1
+  local prompt=$1 yes_l=${2:-Yes} no_l=${3:-No} ybg=${4:-40} nbg=${5:-197} sel=1 key rest
+  local rst=$'\033[0m' gray=$'\033[38;5;252;48;5;240m'
+  local yon non yes no
+  printf -v yon '\033[38;5;0;48;5;%s;1m' "$ybg"
+  printf -v non '\033[38;5;0;48;5;%s;1m' "$nbg"
+  [[ -t 2 && -z ${NO_COLOR-} ]] || { gray= yon= non= rst=; }
+  while true; do
+    ((sel)) && yes="${gray}   ${yes_l}   ${rst}" || yes="${yon}   ${yes_l}   ${rst}"
+    ((sel)) && no="${non}   ${no_l}   ${rst}" || no="${gray}   ${no_l}   ${rst}"
+    printf '\r\033[K  %s  %s %s' "${c212-}$prompt$r" "$yes" "$no" >&2
+    IFS= read -rsn1 key </dev/tty || {
+      printf '\n' >&2
+      return 1
+    }
+    [[ $key == $'\e' ]] && {
+      if read -rsn2 -t 0.1 rest </dev/tty; then
+        key+=$rest
+      else
+        printf '\n' >&2
+        return 1
+      fi
+    }
+    case $key in
+    y | Y)
+      printf '\n' >&2
+      return 0
+      ;;
+    n | N | $'\e')
+      printf '\n' >&2
+      return 1
+      ;;
+    $'\t' | ' ' | h | H | l | L | $'\e[C' | $'\e[D' | $'\e[Z')
+      sel=$((1 - sel))
+      ;;
+    '' | $'\n' | $'\r')
+      printf '\n' >&2
+      ((sel == 0))
+      return
+      ;;
+    $'\x03')
+      printf '\n' >&2
+      ui::die "aborted"
+      ;;
+    esac
+  done
+}
+
+function ask::line {
+  local prompt=$1 default=${2-} out rc=0
+  ask::tty || {
+    printf '%s' "$default"
+    return 0
+  }
+  out=$(gum input --placeholder "$prompt" --value "$default") || rc=$?
+  ask::struck "$rc"
+  ((rc == 0)) || return 1
+  printf '%s' "$out"
+}
+
+# ask::pick HEADER OUT_NAMEREF ITEMS...: multi-select into OUT; 1 on cancel/empty
+# gum: x toggle, enter/ctrl+q submit, esc quit, ctrl+c abort
+function ask::pick {
+  local header=$1
+  local -n _out=$2
+  shift 2
+  ask::tty || return 1
+  local height lines picked rc=0
+  lines=$(tput lines 2>/dev/null) || lines=24
+  height=$((lines - 8))
+  ((height > 15)) && height=15
+  ((height < 3)) && height=3
+  picked=$(
+    GUM_CHOOSE_LIMIT=0 gum choose --no-limit --ordered --selected='*' \
+      --header "${header}  · x toggle · enter ok · ctrl+c abort" \
+      --height "$height" --show-help -- "$@"
+  ) || rc=$?
+  ask::struck "$rc"
+  ((rc == 0)) || return 1
+  [[ $picked ]] || return 1
+  mapfile -t _out <<<"$picked"
+  ((${#_out[@]})) || return 1
+}
+
+function ui::nl { printf '\n'; }
+
+# 256-color + bold/italic; empty when non-TTY or NO_COLOR
+function ui::palette {
+  local i
+  r= it= b=
+  for i in {0..255}; do
+    printf -v "c$i" ''
+    printf -v "C$i" ''
+  done
+  [[ -t 1 && -z ${NO_COLOR:-} ]] || return 0
+  for i in {1..255}; do
+    printf -v "c$i" '\033[38;5;%sm' "$i"
+    printf -v "C$i" '\033[38;5;%s;1m' "$i"
+  done
+  r=$'\033[0m'
+  b=$'\033[1m'
+  it=$'\033[3m'
+}
+ui::palette
+readonly border_color=$c8
+
+# type → gum level + level/message fg (256)
+function ui::log {
+  local type=$1 title=${2-} level=info lfg=39 mfg=252 parts=() p msg='' join=''
+  shift 2 || true
+  case $type in
+  warn) level=warn; lfg=214; mfg=214 ;;
+  err) level=error; lfg=197; mfg=197 ;;
+  ok) lfg=40; mfg=40 ;;
+  step) lfg=212; mfg=39 ;;
+  path) lfg=45; mfg=45 ;;
+  info) lfg=99; mfg=252 ;;
+  esac
+  [[ $title ]] && parts+=("$title")
+  parts+=("$@")
+  ((${#parts[@]})) || return 0
+  for p in "${parts[@]}"; do
+    msg+="${join}${p}"
+    join=' → '
+  done
+  gum log --level "$level" \
+    --level.foreground "$lfg" \
+    --message.foreground "$mfg" \
+    -- "$msg"
+}
+
+# ((DRY)) → log + return 0; else return 1. Caller: dry::skip MSG && return 0
+function dry::skip {
+  ((DRY)) || return 1
+  ui::log warn dry "$1"
+}
+
+function ui::next { gum style --foreground 39 -- "→ $1"; }
+
+function ui::divider {
+  local colr="${1:-c5}" char="${2:-─}" word="${3:-}"
+  local len left right
+  len=$(($(tput cols) - ${#word} - 7))
+  left=$((len / 2))
+  right=$((len - left))
+  colr="${!colr-}"
+  printf '%*s %s %*s\n' "$left" '' "${c57-}$word${r}" "$right" '' |
+    sed "s/ /${colr}$char/g"
+}
+
+function ui::fatal {
+  local msg=$1 tip=${2-}
+  ui::nl
+  gum style --foreground 197 --border rounded --border-foreground 197 \
+    --padding "0 1" -- "✗ $msg" >&2
+  [[ $tip ]] && gum style --foreground 45 -- "tip: $tip" >&2
+  exit 1
+}
+
+function ui::die { ui::fatal "$*" "$NAME help"; }
+
+function ui::error {
+  trap - ERR
+  ui::fatal "command failed ($1): $3" "line $2"
+}
+
+# status/tally key → fg
+function ui::tone {
+  case $1 in
+  done | same) printf '%s' "$c2" ;;
+  diff) printf '%s' "$c214" ;;
+  skip) printf '%s' "$c3" ;;
+  miss | fail | clash | outside | err) printf '%s' "$c197" ;;
+  partial | some | unreadable | large | dry) printf '%s' "$c214" ;;
+  symlink) printf '%s' "$c99" ;;
+  *) printf '%s' "$c252" ;;
+  esac
+}
+
+function ui::pathc {
+  local p=$1 suffix=${2-$r}
+  case $p in
+  home/*) printf '%s%s%s/%s%s' "$c2" home "$c6" "${p#home/}" "$suffix" ;;
+  root/*) printf '%s%s%s/%s%s' "$c2" root "$c6" "${p#root/}" "$suffix" ;;
+  /* | */*) printf '%s%s%s' "$c6" "$p" "$suffix" ;;
+  *) printf '%s%s%s' "$c7" "$p" "$suffix" ;;
+  esac
+}
+
+# ui::row ROWS_REF STATUS PATH NOTE
+function ui::row {
+  local -n _rows=$1
+  _rows+=("$2"$'\t'"$3"$'\t'"$4")
+}
+
+# +N ~N -N → green / yellow / red; other notes stay dim
+function ui::note {
+  local val=$1
+  [[ $val =~ ^\+([0-9]+)\ ~([0-9]+)\ -([0-9]+)$ ]] || {
+    printf '%s%s%s' "$c8" "$val" "$r"
+    return
+  }
+  printf '%s+%s%s %s~%s%s %s-%s%s' \
+    "$c2" "${BASH_REMATCH[1]}" "$r" \
+    "$c214" "${BASH_REMATCH[2]}" "$r" \
+    "$c197" "${BASH_REMATCH[3]}" "$r"
+}
+
+# paint one cell by header name + value; pad to width after color (ANSI-safe)
+# optional STATUS tints path with ui::tone (diff / skip / miss)
+function ui::cell {
+  local hdr=$1 name=$2 val=$3 w=$4 status=${5-} painted pad
+  ((hdr)) && painted=$(printf '%s%s%s' "$C212" "$val" "$r") || case $name in
+  status | key) painted=$(printf '%s%s%s' "$(ui::tone "$val")" "$val" "$r") ;;
+  path)
+    case $status in
+    diff | skip | miss) painted=$(printf '%s%s%s' "$(ui::tone "$status")" "$val" "$r") ;;
+    *) painted=$(ui::pathc "$val") ;;
+    esac
+    ;;
+  note)
+    case $status in
+    skip) painted=$(printf '%s%s%s' "$(ui::tone skip)" "$val" "$r") ;;
+    *) painted=$(ui::note "$val") ;;
+    esac
+    ;;
+  count) painted=$(printf '%s%s%s' "$C39" "$val" "$r") ;;
+  *) painted=$(printf '%s%s%s' "$c252" "$val" "$r") ;;
+  esac
+  printf -v pad '%*s' $((w - ${#val})) ''
+  printf '%s%s' "$painted" "$pad"
+}
+
+# ui::rule CHAR WIDTHS... → sep string with CHAR between padded ─ runs
+function ui::rule {
+  local char=$1 pad sep= j
+  shift
+  for j; do
+    printf -v pad '%*s' $((j + 2)) ''
+    sep+="${char}${pad// /─}"
+  done
+  printf '%s' "$sep"
+}
+
+# TSV → rounded colored table (gum table cannot tint cells per value)
+function ui::table {
+  local -a rows=() heads=() widths=() cells=()
+  local row i j n line sep status
+  mapfile -t rows
+  ((${#rows[@]})) || return 0
+  IFS=$'\t' read -ra heads <<<"${rows[0]}"
+  n=${#heads[@]}
+  for ((j = 0; j < n; j++)); do widths[j]=${#heads[j]}; done
+  for row in "${rows[@]}"; do
+    IFS=$'\t' read -ra cells <<<"$row"
+    for ((j = 0; j < n; j++)); do
+      ((${#cells[j]} > widths[j])) && widths[j]=${#cells[j]}
+    done
+  done
+  sep=$(ui::rule ┬ "${widths[@]}")
+  printf '%s╭%s╮%s\n' "$border_color" "${sep#┬}" "$r"
+  line=
+  for ((j = 0; j < n; j++)); do
+    line+="${border_color}│${r} $(ui::cell 1 "${heads[j]}" "${heads[j]}" "${widths[j]}") "
+  done
+  printf '%s%s│%s\n' "$line" "$border_color" "$r"
+  sep=$(ui::rule ┼ "${widths[@]}")
+  printf '%s├%s┤%s\n' "$border_color" "${sep#┼}" "$r"
+  for ((i = 1; i < ${#rows[@]}; i++)); do
+    IFS=$'\t' read -ra cells <<<"${rows[i]}"
+    line=
+    status=
+    for ((j = 0; j < n; j++)); do
+      [[ ${heads[j]} == status ]] && status=${cells[j]-}
+    done
+    for ((j = 0; j < n; j++)); do
+      line+="${border_color}│${r} $(ui::cell 0 "${heads[j]}" "${cells[j]-}" "${widths[j]}" "$status") "
+    done
+    printf '%s%s│%s\n' "$line" "$border_color" "$r"
+  done
+  sep=$(ui::rule ┴ "${widths[@]}")
+  printf '%s╰%s╯%s\n' "$border_color" "${sep#┴}" "$r"
+}
+
+function ui::tall {
+  local n=$1 rows
+  rows=$(tput lines 2>/dev/null) || rows=24
+  ((n > rows - 4))
+}
+
+function ui::pager {
+  [[ -t 1 ]] || { cat; return; }
+  gum pager --show-line-numbers=false
+}
+
+# pause between job sections when tty
+function ui::beat {
+  [[ -t 1 ]] || return 0
+  sleep "${1:-$BEAT}"
+}
+
+function ui::out {
+  local body=$1 n
+  n=$(printf '%s\n' "$body" | wc -l)
+  [[ -t 1 ]] && ui::tall "$n" && {
+    printf '%s\n' "$body" | ui::pager
+    return
+  }
+  printf '%s\n' "$body"
+}
+
+function ui::paint {
+  local line
+  line=$(str::trim "${1%$'\r'}")
+  case $line in
+  home/* | root/*) ui::pathc "$line" "$border_color" ;;
+  '#'*) printf '%s%s' "${C60}" "$line$border_color" ;;
+  '') printf '%s' "$border_color" ;;
+  *) printf '%s%s' "$c7" "$line$border_color" ;;
+  esac
+}
+
+function view::bars {
+  local s
+  printf -v s '%*s' "$1" ''
+  printf '%s' "${s// /━}"
+}
+
+function view::measure {
+  local -n _w=$1 _d=$2
+  local title=$3 body=$4
+  _d=1
+  _w=$((${#title} + _d + 5))
+  ((_w >= body + 4)) && return 0
+  _w=$((body + 4))
+  _d=$((_w - ${#title} - 5))
+}
+
+function view::open {
+  local top
+  top=$(view::bars "$3")
+  printf '  %s┏━ %s%s%s %s┓%s\n' "$border_color" "$2" "$1" "$border_color" "$top" "$r"
+}
+
+function view::close {
+  local bot
+  bot=$(view::bars $(($1 - 2)))
+  printf '  %s┗%s┛%s\n' "$border_color" "$bot" "$r"
+}
+
+function view::config {
+  local title=$1 line vis pad i width dashes llen=0
+  shift
+  local -a lines=("$@") vises=()
+  for line in "${lines[@]}"; do
+    vis=$(str::trim "${line%$'\r'}")
+    vises+=("$vis")
+    ((${#vis} > llen)) && llen=${#vis}
+  done
+  view::measure width dashes "$title" "$llen"
+  view::open "$title" "$c1" "$dashes"
+  for i in "${!lines[@]}"; do
+    pad=$(printf '%*s' $((width - 4 - ${#vises[i]})) '')
+    printf '  %s┃ %s%s ┃%s\n' "$border_color" "$(ui::paint "${lines[i]}")" "$pad" "$r"
+  done
+  view::close "$width"
+}
+
+function view::panel {
+  local title=$1
+  shift
+  gum style --border rounded --border-foreground 212 --padding "0 1" -- "$title" "$@"
+}
+
+function view::manifest {
+  local title=${1:-$MANIFEST} body
+  local -a lines=()
+  mapfile -t lines <"$MANIFEST"
+  body=$(view::config "$title" "${lines[@]}")
+  ui::out "$body"
+}
+
+function view::git {
+  git::repo || return 0
+  local status log
+  status=$(git -c color.status=always status -sb 2>/dev/null) || return 0
+  view::panel "git status" "$status"
+  ui::beat
+  git rev-parse --verify HEAD >/dev/null 2>&1 || return 0
+  log=$(git -c color.ui=always log --oneline --decorate -5 2>/dev/null) || return 0
+  [[ $log ]] || return 0
+  view::panel "recent" "$log"
+  ui::beat
+}
+
+function view::tree {
+  local dir=${1:-.}
+  view::panel "tree" "$(tree -aC -I '.git' -L 6 --noreport "$dir")"
+}
+
+# vim: ft=bash

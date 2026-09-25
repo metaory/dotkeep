@@ -1,0 +1,90 @@
+# shellcheck shell=bash disable=SC2154
+
+function size::mib {
+  printf '%d.%02d MiB' $(($1 / 1048576)) $((($1 % 1048576) * 100 / 1048576))
+}
+
+# DOTKEEP_MAX in MiB. Above GitHub's reject, warn and cap.
+function size::limit {
+  local n=${DOTKEEP_MAX:-} cap=$((PUSH / 1048576))
+  [[ $n ]] || return 0
+  [[ $n =~ ^[0-9]+$ ]] || {
+    ui::log warn size "DOTKEEP_MAX=$n" "ignored, using $((MAX / 1048576)) MiB"
+    return 0
+  }
+  ((${#n} > 3 || 10#$n > cap)) && {
+    ui::log warn size "DOTKEEP_MAX=$n" "GitHub rejects over $cap MiB, using $cap"
+    n=$cap
+  }
+  ((10#$n < 1)) && {
+    ui::log warn size "DOTKEEP_MAX=$n" "ignored, using $((MAX / 1048576)) MiB"
+    return 0
+  }
+  MAX=$((10#$n * 1024 * 1024))
+}
+
+# size::scan ROOT: bytes<TAB>path for regular files over MAX
+function size::scan {
+  local b p
+  [[ -e $1 && ! -L $1 ]] || return 0
+  find "$1" -type f -printf '%s\t%p\n' 2>/dev/null | while IFS=$'\t' read -r b p; do
+    ((b <= MAX)) && continue
+    printf '%s\t%s\n' "$b" "$p"
+  done || :
+}
+
+# size::rows ROOT LABEL: bytes<TAB>display, label plus path under ROOT
+function size::rows {
+  local root=$1 label=$2 b p rel
+  while IFS=$'\t' read -r b p; do
+    rel=$(path::rel "$root" "$p")
+    [[ $rel ]] && rel="/$rel"
+    printf '%s\t%s\n' "$b" "$label$rel"
+  done < <(size::scan "$root")
+}
+
+function size::warn {
+  local b p
+  while IFS=$'\t' read -r b p; do
+    ui::log warn size "$(size::mib "$b")"
+    ui::next "$p"
+    tally large
+  done < <(size::rows "$@")
+}
+
+function size::history {
+  local type sz oid path note
+  git::repo || return 0
+  git rev-list --objects --all 2>/dev/null |
+    git cat-file --batch-check='%(objecttype) %(objectsize) %(objectname) %(rest)' |
+    while read -r type sz oid path; do
+      [[ $type == blob ]] || continue
+      [[ $sz =~ ^[0-9]+$ ]] || continue
+      ((sz > MAX)) || continue
+      note='in history'
+      ((sz > PUSH)) && note='in history, push will reject'
+      ui::log warn size "$(size::mib "$sz")" "$note"
+      ui::next "${path:-$oid}"
+    done || :
+}
+
+# size::exclude SRC DST: drop repo leftovers; tally only ones preview missed
+function size::exclude {
+  local src=$1 dst=$2 b p rel removed=0
+  local -A hit=()
+  [[ -e $dst && ! -L $dst ]] || return 0
+  while IFS=$'\t' read -r b p; do
+    rel=$(path::rel "$src" "$p")
+    hit[${rel:-.}]=1
+  done < <(size::scan "$src")
+  while IFS=$'\t' read -r b p; do
+    rel=$(path::rel "$dst" "$p")
+    rm -f -- "$p"
+    ((++removed))
+    [[ -v hit[${rel:-.}] ]] || tally large
+  done < <(size::scan "$dst")
+  ((removed)) || return 0
+  ui::log warn size "dropped $removed" "over $((MAX / 1048576)) MiB"
+}
+
+# vim: ft=bash

@@ -1,0 +1,115 @@
+# shellcheck shell=bash disable=SC2154
+
+function conf::here {
+  local f=$PWD/$DOTCONF
+  [[ -f $f ]] || return 1
+  MANIFEST=$f
+  ROOT=$(dirname "$f")
+}
+
+function conf::discover {
+  conf::here || {
+    help::main
+    ui::fatal "no ./$DOTCONF" "$NAME init"
+  }
+}
+
+function conf::read {
+  [[ -f $MANIFEST ]] || ui::die "missing manifest at $MANIFEST"
+  local line
+  while IFS= read -r line || [[ $line ]]; do
+    line=$(path::trim "$line")
+    [[ $line ]] && printf '%s\n' "$line"
+  done <"$MANIFEST"
+}
+
+function conf::parse {
+  local -n _out=$1
+  local raw n
+  local -A seen=()
+  _out=()
+  for raw in "${@:2}"; do
+    [[ $raw ]] || continue
+    n=$(path::canon "$raw")
+    [[ -v seen[$n] ]] && continue
+    seen[$n]=1
+    _out+=("$n")
+  done
+  path::overlap "$1"
+}
+
+function conf::entries {
+  local -n _e=$1
+  local -a raws=()
+  mapfile -t raws < <(conf::read)
+  conf::parse "$1" "${raws[@]}"
+  ((${#_e[@]})) || {
+    help::guide_empty
+    ui::fatal "manifest is empty" "edit $MANIFEST  then  $NAME backup"
+  }
+}
+
+function conf::pairs {
+  local e
+  for e; do printf '%s\t%s\t%s\n' "$e" "$(path::resolve "$e")" "$ROOT/$e"; done
+}
+
+function cmd::config {
+  conf::here || {
+    help::main
+    return
+  }
+  help::config
+  view::manifest "$MANIFEST"
+  help::syntax
+  help::cmds
+  ask::tty && ask::yn "edit $DOTCONF?" || return
+  local e
+  for e in "${EDITOR-}" nvim vim vi; do
+    command -v "$e" >/dev/null && exec "$e" "$MANIFEST"
+  done
+  ui::fatal "no editor" "nvim, vim, or vi"
+}
+
+function cmd::check {
+  local es=() e fs repo why note
+  local -a rows=("status"$'\t'"path"$'\t'"note")
+  tally::reset
+  conf::entries es
+  while IFS=$'\t' read -r e fs repo; do
+    why=
+    sync::skip "$fs" "$repo" backup why && {
+      ui::row rows "${WHY[$why]:-skip}" "$fs" "$why"
+      tally::why "$why"
+      continue
+    }
+    size::warn "$fs" "$e"
+    [[ -e $repo ]] || {
+      ui::row rows miss "$fs" 'missing in state'
+      tally miss
+      continue
+    }
+    why=
+    sync::skip "$repo" "$fs" restore why && {
+      ui::row rows "${WHY[$why]:-skip}" "$fs" "$why"
+      tally::why "$why"
+      continue
+    }
+    note=
+    sync::delta "$fs" "$repo" backup note || {
+      tally same
+      ui::row rows same "$fs" identical
+      continue
+    }
+    tally diff
+    ui::row rows diff "$fs" "$note"
+  done < <(conf::pairs "${es[@]}")
+  size::history
+  ui::nl
+  printf '%s\n' "${rows[@]}" | ui::table
+  tally::end check
+  ((${T[clash]:-0})) || return 0
+  exit 1
+}
+
+# vim: ft=bash

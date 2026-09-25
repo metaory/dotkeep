@@ -1,0 +1,459 @@
+# shellcheck shell=bash disable=SC2154
+
+function sync::ends {
+  local side=$1 e=$2 fs=$3 repo=$4
+  local -n _src=$5 _dst=$6 _from=$7 _to=$8
+  case $side in
+  backup)
+    _src=$fs
+    _dst=$repo
+    _from=$fs
+    _to=state/$e
+    ;;
+  restore)
+    _src=$repo
+    _dst=$fs
+    _from=state/$e
+    _to=$fs
+    ;;
+  esac
+}
+
+# sync::skip SRC DST SIDE WHY_NAMEREF: 0 = skip (sets why), 1 = usable
+# restore may replace a live symlink dst with a regular copy
+function sync::skip {
+  local src=$1 dst=$2 side=$3
+  local -n _why=$4
+  [[ -L $src ]] && {
+    _why=symlink
+    return 0
+  }
+  [[ -e $src ]] || {
+    case $side in
+    backup) _why='not on machine' ;;
+    restore) _why='not in state' ;;
+    esac
+    return 0
+  }
+  [[ $(sync::canon "$src") != "$(sync::canon "$dst")" ]] || {
+    _why='same path'
+    return 0
+  }
+  [[ $side != backup ]] || sync::in_state "$dst" || {
+    _why='dest outside state'
+    return 0
+  }
+  path::clash "$src" "$dst" && {
+    _why='type mismatch'
+    return 0
+  }
+  return 1
+}
+
+# sync::delta SRC DST SIDE NOTE_NAMEREF: 0 = dirty (sets +/~/- note), 1 = identical
+# files via cmp; dirs via rsync -n itemize with same filters as copy
+function sync::delta {
+  local src=$1 dst=$2 side=$3
+  local -n _note=$4
+  local -a opts=("${RSYNC[@]}" -n --out-format='%i %n') extra=()
+  local tail= out line code attr add=0 chg=0 del=0 rc=0 skip
+  _note=
+  [[ -e $dst ]] || {
+    _note='+1 ~0 -0'
+    return 0
+  }
+  if [[ -f $src && -f $dst ]]; then
+    cmp -s -- "$src" "$dst" && return 1
+    _note='+0 ~1 -0'
+    return 0
+  fi
+  [[ $side == restore ]] && opts+=(--delete)
+  [[ $side == backup ]] && opts+=(--max-size="$MAX")
+  [[ -d $src ]] && {
+    tail=/
+    skip=$(sync::unreadable "$src")
+    [[ $skip ]] && while IFS= read -r line; do
+      [[ $line ]] && extra+=("--exclude=${line#/}")
+    done <<<"$skip"
+  }
+  out=$("${opts[@]}" "${extra[@]}" "$src$tail" "$dst$tail" 2>/dev/null) || rc=$?
+  [[ $out ]] || {
+    ((rc == 0)) && return 1
+    _note='+0 ~1 -0'
+    return 0
+  }
+  while IFS= read -r line; do
+    [[ $line ]] || continue
+    if [[ $line == '*deleting '* ]]; then
+      ((++del))
+      continue
+    fi
+    code=${line%% *}
+    # only real transfers (< sent, > received) — skip local-only "c" noise
+    [[ $code == [\<\>][fdLDS]* ]] || continue
+    attr=${code:2}
+    # content only: new (all +), checksum (c), size (s) — ignore perms/time
+    if [[ $attr != *[!+]* ]]; then
+      ((++add))
+    elif [[ $attr == *[cs]* ]]; then
+      ((++chg))
+    fi
+  done <<<"$out"
+  ((add + chg + del)) || return 1
+  _note="+${add} ~${chg} -${del}"
+  return 0
+}
+
+# sync::preview SIDE OK_ES_NAMEREF PATHS...: fills ok entry list; 1 = nothing to do
+function sync::preview {
+  local side=$1
+  local -n _ok=$2
+  shift 2
+  local e fs repo src dst from to why note path shown=0
+  local -a rows=("status"$'\t'"path"$'\t'"note")
+  _ok=()
+  ui::nl
+  case $side in
+  backup) ui::log step backup "machine → state ($# paths)" ;;
+  restore)
+    ui::log step restore "state → machine ($# paths)"
+    ui::log info 'saving backups' 'in' "/tmp/$NAME.XXXXXX/"
+    ;;
+  esac
+  while IFS=$'\t' read -r e fs repo; do
+    sync::ends "$side" "$e" "$fs" "$repo" src dst from to
+    why=
+    sync::skip "$src" "$dst" "$side" why && {
+      ui::row rows skip "$from" "$why"
+      continue
+    }
+    ((++shown))
+    [[ $side == restore && ! -e $dst ]] && {
+      _ok+=("$e")
+      ui::row rows miss "$to" 'not on machine'
+      continue
+    }
+    note=
+    sync::delta "$src" "$dst" "$side" note || {
+      case $side in
+      backup) path=$from ;;
+      restore) path=$to ;;
+      esac
+      ui::row rows same "$path" identical
+      continue
+    }
+    _ok+=("$e")
+    case $side in
+    backup)
+      ui::row rows diff "$from" "$note"
+      size::warn "$src" "$e"
+      ;;
+    restore) ui::row rows diff "$to" "$note" ;;
+    esac
+  done < <(conf::pairs "$@")
+  [[ $side == backup ]] && size::history
+  ((${#rows[@]} > 1)) && printf '%s\n' "${rows[@]}" | ui::table
+  ui::nl
+  ((${#_ok[@]})) || {
+    ((shown)) && {
+      ui::log ok "$side" 'all identical'
+      return 1
+    }
+    ui::fatal "no valid sources" "fix $MANIFEST or create the missing paths"
+  }
+}
+
+function sync::readable {
+  ((DRY)) && return 0
+  find "$1" -type f -uid "$UID" ! -readable -exec chmod u+r {} + 2>/dev/null || :
+}
+
+function sync::unreadable {
+  [[ -d $1 ]] || return 0
+  find "$1" -mindepth 1 \
+    \( -type d \( ! -readable -o ! -executable \) -prune -printf '/%P\n' \) -o \
+    \( -type f ! -readable -printf '/%P\n' \) \
+    2>/dev/null || :
+}
+
+function sync::modes {
+  local src=$1 dst=$2 mode path rel
+  [[ -d $src && -d $dst ]] || return 0
+  while IFS= read -r -d '' path; do
+    mode=$(stat -c %a -- "$path")
+    rel=$(path::rel "$src" "$path")
+    chmod -- "$mode" "$dst${rel:+/$rel}" 2>/dev/null || :
+  done < <(find "$src" -type d -print0 2>/dev/null || :)
+}
+
+function sync::canon { realpath -m "$1"; }
+
+function sync::in_state {
+  local here to
+  here=$(sync::canon .)
+  to=$(sync::canon "$1")
+  [[ $to == "$here"/home/* || $to == "$here"/root/* ]]
+}
+
+function sync::finish {
+  local src=$1 dst=$2 side=${3-}
+  ((DRY)) || sync::modes "$src" "$dst"
+  [[ $side == backup && DRY -eq 0 ]] && size::exclude "$src" "$dst"
+  return 0
+}
+
+function sync::path {
+  local src=$1 dst=$2 side=${3-} rc=0 err skip tail=
+  local -a extra=() opts=("${RSYNC[@]}")
+  UNREAD=0
+  [[ $side == restore ]] && opts+=(--delete)
+  [[ $side == backup ]] && opts+=(--max-size="$MAX")
+  ((DRY)) && opts+=(--dry-run)
+  ((DRY)) || mkdir -p "$(dirname "$dst")"
+  sync::readable "$src"
+  skip=$(sync::unreadable "$src")
+  [[ $skip ]] && {
+    while IFS= read -r line; do
+      [[ $line ]] && extra+=("--exclude=${line#/}")
+    done <<<"$skip"
+    UNREAD=${#extra[@]}
+    ui::log warn some "$src" "$UNREAD unreadable"
+  }
+  [[ -d $src ]] && {
+    ((DRY)) || mkdir -p "$dst"
+    tail=/
+  }
+  if ask::tty && ((DRY == 0)); then
+    # --show-error surfaces rsync stderr on non-zero (incl. partial 23/24)
+    gum::spin "${side:-copy} ${src##*/}" "${opts[@]}" "${extra[@]}" "$src$tail" "$dst$tail" || rc=$?
+  else
+    err=$("${opts[@]}" "${extra[@]}" "$src$tail" "$dst$tail" 2>&1) || rc=$?
+  fi
+  case $rc in
+  0)
+    sync::finish "$src" "$dst" "$side"
+    return 0
+    ;;
+  23 | 24)
+    ui::log warn rsync "partial ($rc)" "$src"
+    [[ $err ]] && printf '%s\n' "$err" >&2
+    sync::finish "$src" "$dst" "$side"
+    return "$rc"
+    ;;
+  esac
+  [[ $err ]] && printf '%s\n' "$err" >&2
+  return "$rc"
+}
+
+function sync::safety {
+  ui::nl
+  local -n _safe=$1
+  local -n _bak=$2
+  local -n _n=$3
+  local e fs repo
+  local -a keep=()
+  dry::skip "skip safety bak" && {
+    _bak=
+    _n=0
+    return 0
+  }
+  _bak=$(mktemp -d /tmp/"$NAME".XXXXXX)
+  _n=0
+  ui::log step backup "$_bak"
+  while IFS=$'\t' read -r e fs repo; do
+    [[ -L $fs || ! -e $fs ]] && {
+      keep+=("$e")
+      continue
+    }
+    path::clash "$fs" "$repo" && {
+      keep+=("$e")
+      continue
+    }
+    sync::path "$fs" "$_bak/$e" && {
+      ui::log info bak "$_bak/$e"
+      ((++_n))
+      keep+=("$e")
+      continue
+    }
+    ui::log warn bak "failed $fs"
+    # A: skip this path and continue  |  B: abort whole restore
+    ask::yn "bak failed for $e - skip this path and continue?" || ui::die "aborted (safety bak failed)"
+    ui::log warn skip "$e" "no safety bak"
+  done < <(conf::pairs "${_safe[@]}")
+  _safe=("${keep[@]}")
+  ((_n)) && ui::log ok backup "$_n paths" "$_bak"
+  ((_n)) || ui::log warn safety "nothing on machine to bak"
+  ui::nl
+}
+
+function sync::one {
+  local side=$1 src=$2 dst=$3 from=$4 to=$5
+  case $side in
+  backup) ui::log path '' "$from" ;;
+  restore) ui::log info '' "$to" ;;
+  esac
+  sync::path "$src" "$dst" "$side"
+}
+
+# apply listed paths; keeps tally in-process (spin cannot wrap shell state)
+# hard fail → tally fail, continue; partial (23/24) → inform + ask continue
+function sync::apply {
+  local side=$1
+  local -n _es=$2
+  local e fs repo src dst from to why rc
+  while IFS=$'\t' read -r e fs repo; do
+    sync::ends "$side" "$e" "$fs" "$repo" src dst from to
+    why=
+    sync::skip "$src" "$dst" "$side" why && {
+      tally::why "$why"
+      continue
+    }
+    rc=0
+    sync::one "$side" "$src" "$dst" "$from" "$to" || rc=$?
+    case $rc in
+    0)
+      ((UNREAD)) && {
+        tally some
+        tally::add unreadable "$UNREAD"
+        continue
+      }
+      tally done
+      ;;
+    23 | 24)
+      tally partial
+      ui::log warn partial "$from" "rsync $rc: some files may be missing or truncated"
+      ui::next "options: continue with remaining paths, or abort"
+      ask::yn "partial copy on $from - continue?" || ui::die "aborted (partial transfer)"
+      ;;
+    *)
+      tally fail
+      ui::log warn fail "$from"
+      ;;
+    esac
+  done < <(conf::pairs "${_es[@]}")
+}
+
+function sync::prune {
+  git::repo || return 0
+  dry::skip "skip git clean" && return 0
+  # git clean pathspec excludes are unreliable; drop ignored files by hand,
+  # keeping just-synced manifest paths (incl. nested .gitignore hits)
+  local -a protect=("$@")
+  local path p
+  while IFS= read -r -d '' path; do
+    for p in "${protect[@]}"; do
+      [[ $path == "$p" || $path == "$p"/* ]] && continue 2
+    done
+    rm -rf -- "$path"
+  done < <(git ls-files -z -o -i --exclude-standard -- home root)
+}
+
+function sync::readme {
+  dry::skip "skip README.md rewrite" && return 0
+  {
+    printf '%s\n' \
+      '# dotkeep' \
+      '' \
+      'State repo managed by [dotkeep](https://github.com/metaory/dotkeep).' \
+      '' \
+      "Generated \`$(date +'%Y-%m-%d %H:%M')\`." \
+      '' \
+      "Manifest: \`$DOTCONF\`" \
+      '' \
+      '## Tree' \
+      '' \
+      '```'
+    tree -a -I '.git' --noreport .
+    printf '%s\n' '```'
+  } >README.md
+  ui::log ok readme README.md
+}
+
+function sync::git {
+  git::repo || return 0
+  ui::nl
+  view::git
+}
+
+function sync::run {
+  local side=$1
+  local -n _es=$2
+  local bak='' n=0
+  local -a ok_es=()
+  tally::reset
+  trap 'ui::die "aborted"' INT
+
+  git::prep
+  "help::$side"
+  ui::beat
+  view::manifest
+  ui::beat
+  ui::divider
+  sync::preview "$side" ok_es "${_es[@]}" || return 0
+  ui::divider
+
+  local pick_q='pick paths?' pick_all=All
+  [[ $side == restore ]] && { pick_q='Restore:'; pick_all=ALL; }
+  if ask::tty && ((${#ok_es[@]} > 1)) && ask::yn "$pick_q" Some "$pick_all" 214 40; then
+    ask::pick "pick $side paths" ok_es "${ok_es[@]}" || ui::die "aborted (no paths selected)"
+    ui::divider
+    sync::preview "$side" ok_es "${ok_es[@]}" || return 0
+    ui::divider
+  fi
+
+  ui::nl
+  case $side in
+  restore) printf '  %srestoring %s paths...%s\n' "${c39-}" "${#ok_es[@]}" "$r" >&2 ;;
+  backup) printf '  %sbacking up %s paths...%s\n' "${c39-}" "${#ok_es[@]}" "$r" >&2 ;;
+  esac
+  printf '\n' >&2
+  ask::yn "are you sure?" || ui::die "aborted"
+  ((DRY)) && ui::log warn dry "DRY=1: rsync --dry-run, no mkdir/git writes"
+
+  [[ $side == restore ]] && {
+    ui::beat
+    sync::safety ok_es bak n
+    sync::prune "${ok_es[@]}"
+  }
+
+  ui::beat
+  ui::divider
+  ui::log step "$side" "copying ${#ok_es[@]} paths"
+  sync::apply "$side" ok_es
+
+  [[ $side == backup ]] && {
+    ui::beat
+    sync::prune "${ok_es[@]}"
+    sync::readme
+  }
+  ui::beat
+  tally::end "$side"
+  ui::nl
+  [[ $side == backup ]] && {
+    ui::beat
+    git::ship
+    sync::git
+  }
+  ui::nl
+  [[ $side == restore && n -gt 0 ]] && ui::log info prior "$bak" || :
+}
+
+function cmd::init {
+  local dir=${1:-.}
+  dir=${dir%/}
+  mkdir -p "$dir/home" "$dir/root"
+  [[ -e $dir/$DOTCONF ]] || : >"$dir/$DOTCONF"
+  [[ -e $dir/.gitignore ]] || cat "$LIB/gitignore" >"$dir/.gitignore"
+  if command -v git >/dev/null; then
+    [[ -d $dir/.git || -f $dir/.git ]] || git -C "$dir" init -q
+  else
+    ui::log warn init "git not found, skipped git init"
+  fi
+  ui::log ok init "$dir" "$dir/$DOTCONF"
+  ui::nl
+  view::tree "$dir"
+  ui::nl
+  help::guide_init
+}
+
+# vim: ft=bash

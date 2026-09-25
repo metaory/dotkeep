@@ -1,0 +1,83 @@
+# shellcheck shell=bash disable=SC2154
+
+function str::trim {
+  local s=$1
+  s=${s#"${s%%[![:space:]]*}"}
+  printf '%s' "${s%"${s##*[![:space:]]}"}"
+}
+
+function path::trim {
+  printf '%s\n' "$(str::trim "${1%%#*}")"
+}
+
+function path::norm {
+  local IFS=/ p
+  local -a out=()
+  for p in $1; do
+    case $p in
+    '' | .) ;;
+    ..)
+      ((${#out[@]} > 1)) || return 1
+      unset 'out[-1]'
+      ;;
+    *) out+=("$p") ;;
+    esac
+  done
+  ((${#out[@]} >= 2)) || return 1
+  [[ ${out[0]} == home || ${out[0]} == root ]] || return 1
+  IFS=/
+  printf '%s\n' "${out[*]}"
+}
+
+function path::rel {
+  local rel=${2#"$1"}
+  printf '%s' "${rel#/}"
+}
+
+function path::resolve {
+  case $1 in
+  home/*) printf '%s/%s\n' "$HOME" "${1#home/}" ;;
+  root/*) printf '/%s\n' "${1#root/}" ;;
+  *) return 1 ;;
+  esac
+}
+
+function path::canon {
+  local n
+  [[ $1 != *['$~']* ]] || ui::die "forbidden char in: $1"
+  n=$(path::norm "$1") || ui::die "invalid path: $1"
+  printf '%s\n' "$n"
+}
+
+# keep parents, drop children; order in manifest does not matter
+function path::overlap {
+  local -n _paths=$1
+  local -a s=() keep=()
+  ((${#_paths[@]} < 2)) && return 0
+  mapfile -t s < <(printf '%s\n' "${_paths[@]}" | sort)
+  local -A drop=()
+  local p parent=
+  for p in "${s[@]}"; do
+    [[ $parent && $p == "$parent"/* ]] && {
+      drop[$p]=$parent
+      continue
+    }
+    parent=$p
+  done
+  ((${#drop[@]})) || return 0
+  for p in "${_paths[@]}"; do
+    [[ -v drop[$p] ]] && {
+      ui::log warn drop "$p" "under ${drop[$p]}"
+      continue
+    }
+    keep+=("$p")
+  done
+  _paths=("${keep[@]}")
+}
+
+function path::clash {
+  [[ -e $1 && -e $2 ]] || return 1
+  [[ (-d $1 && -f $2) || (-f $1 && -d $2) ]]
+}
+
+# vim: ft=bash
