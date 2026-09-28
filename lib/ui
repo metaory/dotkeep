@@ -120,12 +120,32 @@ function ui::log {
   local type=$1 title=${2-} level=info lfg=39 mfg=252 parts=() p msg='' join=''
   shift 2 || true
   case $type in
-  warn) level=warn; lfg=214; mfg=214 ;;
-  err) level=error; lfg=197; mfg=197 ;;
-  ok) lfg=40; mfg=40 ;;
-  step) lfg=212; mfg=39 ;;
-  path) lfg=45; mfg=45 ;;
-  info) lfg=99; mfg=252 ;;
+  warn)
+    level=warn
+    lfg=214
+    mfg=214
+    ;;
+  err)
+    level=error
+    lfg=197
+    mfg=197
+    ;;
+  ok)
+    lfg=40
+    mfg=40
+    ;;
+  step)
+    lfg=212
+    mfg=39
+    ;;
+  path)
+    lfg=45
+    mfg=45
+    ;;
+  info)
+    lfg=99
+    mfg=252
+    ;;
   esac
   [[ $title ]] && parts+=("$title")
   parts+=("$@")
@@ -300,7 +320,10 @@ function ui::tall {
 }
 
 function ui::pager {
-  [[ -t 1 ]] || { cat; return; }
+  [[ -t 1 ]] || {
+    cat
+    return
+  }
   gum pager --show-line-numbers=false
 }
 
@@ -350,7 +373,7 @@ function view::measure {
 function view::open {
   local top
   top=$(view::bars "$3")
-  printf '  %s┏━ %s%s%s %s┓%s\n' "$border_color" "$2" "$1" "$border_color" "$top" "$r"
+  printf '  %s  ┏━ %s%s%s %s┓%s\n' "$border_color" "$2" "$1" "$border_color" "$top" "$r"
 }
 
 function view::close {
