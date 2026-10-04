@@ -93,6 +93,18 @@ function ask::pick {
   ((${#_out[@]})) || return 1
 }
 
+# ask::choose HEADER ITEMS... → prints one pick; 1 on cancel
+function ask::choose {
+  local header=$1 picked rc=0
+  shift
+  ask::tty || return 1
+  picked=$(gum choose --header "$header" -- "$@") || rc=$?
+  ask::struck "$rc"
+  ((rc == 0)) || return 1
+  [[ $picked ]] || return 1
+  printf '%s' "$picked"
+}
+
 function ui::nl { printf '\n'; }
 
 # 256-color + bold/italic; empty when non-TTY or NO_COLOR
@@ -373,7 +385,7 @@ function view::measure {
 function view::open {
   local top
   top=$(view::bars "$3")
-  printf '  %s  ┏━ %s%s%s %s┓%s\n' "$border_color" "$2" "$1" "$border_color" "$top" "$r"
+  printf '  %s┏━ %s%s%s %s┓%s\n' "$border_color" "$2" "$1" "$border_color" "$top" "$r"
 }
 
 function view::close {

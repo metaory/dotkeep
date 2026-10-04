@@ -21,7 +21,7 @@ declare -A T=()
   exit 1
 }
 
-for bin in basename cat cmp curl dirname mkdir mktemp readlink realpath rsync sed sort tar tput tree; do
+for bin in basename cat cmp curl diff dirname mkdir mktemp readlink realpath rsync sed sort tar tput tree; do
   command -v "$bin" >/dev/null && continue
   # curl/tar only needed for gum binary install; soft-warn later in gum::ensure
   [[ $bin == curl || $bin == tar ]] && continue
@@ -34,7 +34,7 @@ command -v git >/dev/null || printf '%s: git not found (git features disabled)\n
 SCRIPT=$(readlink -f "${BASH_SOURCE[0]}")
 readonly LIB=${SCRIPT%/*}/lib
 
-[[ -r $LIB/gum && -r $LIB/ui && -r $LIB/help && -r $LIB/path && -r $LIB/conf && -r $LIB/size && -r $LIB/git && -r $LIB/tally && -r $LIB/sync ]] || {
+[[ -r $LIB/gum && -r $LIB/ui && -r $LIB/help && -r $LIB/path && -r $LIB/conf && -r $LIB/size && -r $LIB/git && -r $LIB/tally && -r $LIB/merge && -r $LIB/sync ]] || {
   printf '%s\n' "$NAME: incomplete installation: $LIB" >&2
   exit 1
 }
@@ -55,6 +55,8 @@ source "$LIB/size"
 source "$LIB/git"
 # shellcheck source=lib/tally
 source "$LIB/tally"
+# shellcheck source=lib/merge
+source "$LIB/merge"
 # shellcheck source=lib/sync
 source "$LIB/sync"
 

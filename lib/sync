@@ -378,8 +378,8 @@ function sync::git {
 function sync::run {
   local side=$1
   local -n _es=$2
-  local bak='' n=0
-  local -a ok_es=()
+  local bak='' n=0 mode=all
+  local -a ok_es=() leaves=() plan=() defer=() write_es=()
   tally::reset
   trap 'ui::die "aborted"' INT
 
@@ -393,7 +393,10 @@ function sync::run {
   ui::divider
 
   local pick_q='pick paths?' pick_all=All
-  [[ $side == restore ]] && { pick_q='Restore:'; pick_all=ALL; }
+  [[ $side == restore ]] && {
+    pick_q='Restore:'
+    pick_all=ALL
+  }
   if ask::tty && ((${#ok_es[@]} > 1)) && ask::yn "$pick_q" Some "$pick_all" 214 40; then
     ask::pick "pick $side paths" ok_es "${ok_es[@]}" || ui::die "aborted (no paths selected)"
     ui::divider
@@ -401,10 +404,30 @@ function sync::run {
     ui::divider
   fi
 
+  merge::leaves "$side" ok_es leaves
+  ((${#leaves[@]})) || {
+    ui::log ok "$side" 'no leaf diffs'
+    return 0
+  }
+  ui::log step leaves "${#leaves[@]} files"
+  merge::leaf_table leaves
+
+  if ask::tty && ask::yn 'per-file?' Per-file All 214 40; then
+    mode=each
+    merge::decide "$side" leaves plan defer
+    ((${#plan[@]} + ${#defer[@]})) || {
+      ui::log ok "$side" 'nothing selected'
+      return 0
+    }
+    merge::plan_es plan defer write_es
+  else
+    write_es=("${ok_es[@]}")
+  fi
+
   ui::nl
   case $side in
-  restore) printf '  %srestoring %s paths...%s\n' "${c39-}" "${#ok_es[@]}" "$r" >&2 ;;
-  backup) printf '  %sbacking up %s paths...%s\n' "${c39-}" "${#ok_es[@]}" "$r" >&2 ;;
+  restore) printf '  %srestoring %s paths...%s\n' "${c39-}" "${#write_es[@]}" "$r" >&2 ;;
+  backup) printf '  %sbacking up %s paths...%s\n' "${c39-}" "${#write_es[@]}" "$r" >&2 ;;
   esac
   printf '\n' >&2
   ask::yn "are you sure?" || ui::die "aborted"
@@ -412,18 +435,26 @@ function sync::run {
 
   [[ $side == restore ]] && {
     ui::beat
-    sync::safety ok_es bak n
-    sync::prune "${ok_es[@]}"
+    sync::safety write_es bak n
+    ((${#write_es[@]})) || ui::die "aborted (no paths left after safety bak)"
+    [[ $mode == each ]] && merge::keep_es write_es plan defer
+    sync::prune "${write_es[@]}"
   }
 
   ui::beat
   ui::divider
-  ui::log step "$side" "copying ${#ok_es[@]} paths"
-  sync::apply "$side" ok_es
+  if [[ $mode == each ]]; then
+    ui::log step "$side" "applying ${#plan[@]} leaf actions"
+    merge::apply_plan "$side" plan
+    merge::resolve "$side" defer
+  else
+    ui::log step "$side" "copying ${#write_es[@]} paths"
+    sync::apply "$side" write_es
+  fi
 
   [[ $side == backup ]] && {
     ui::beat
-    sync::prune "${ok_es[@]}"
+    sync::prune "${write_es[@]}"
     sync::readme
   }
   ui::beat

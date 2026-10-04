@@ -1,0 +1,339 @@
+# shellcheck shell=bash disable=SC2154
+
+# merge::text FILE: 0 = text (or empty), 1 = binary / unreadable
+# (grep cannot match NUL; compare byte count after stripping NULs)
+function merge::text {
+  local a b
+  [[ -f $1 && -r $1 ]] || return 1
+  [[ ! -s $1 ]] && return 0
+  a=$(wc -c <"$1")
+  b=$(tr -d '\0' <"$1" | wc -c)
+  ((a == b))
+}
+
+# merge::newer LIVE STATE → live|state|tie|na
+function merge::newer {
+  local live=$1 state=$2 lt st
+  [[ -e $live && -e $state ]] || {
+    printf na
+    return 0
+  }
+  lt=$(stat -c %Y -- "$live")
+  st=$(stat -c %Y -- "$state")
+  ((lt > st)) && {
+    printf live
+    return 0
+  }
+  ((st > lt)) && {
+    printf state
+    return 0
+  }
+  printf tie
+}
+
+# merge::diff LIVE STATE — git-style; always continues
+function merge::diff {
+  local live=$1 state=$2
+  command -v git >/dev/null || {
+    ui::log warn diff 'git missing'
+    return 0
+  }
+  ui::nl
+  git --no-pager diff --no-index --color=always -- "$live" "$state" || true
+  ui::nl
+}
+
+# merge::safe DEST SRC OUT: 0 = clean OUT, 1 = unsafe / conflict
+function merge::safe {
+  local dest=$1 src=$2 out=$3 base rc=0
+  command -v git >/dev/null || return 1
+  merge::text "$dest" && merge::text "$src" || return 1
+  base=$(mktemp)
+  diff --unchanged-line-format='%L' --old-line-format='' --new-line-format='' \
+    -- "$dest" "$src" >"$base" || true
+  git merge-file -p -- "$dest" "$base" "$src" >"$out" || rc=$?
+  rm -f -- "$base"
+  ((rc == 0)) || return 1
+  return 0
+}
+
+# leaf record: e rel live state kind newer text
+function merge::leaf_add {
+  local -n _L=$1
+  local e=$2 rel=$3 live=$4 state=$5 kind=$6 newer text=0
+  newer=$(merge::newer "$live" "$state")
+  [[ $kind == chg ]] && merge::text "$live" && merge::text "$state" && text=1
+  _L+=("$e"$'\t'"$rel"$'\t'"$live"$'\t'"$state"$'\t'"$kind"$'\t'"$newer"$'\t'"$text")
+}
+
+function merge::leaf_entry {
+  local side=$1 e=$2 fs=$3 repo=$4 src=$5 dst=$6 outn=$7
+  local out line code attr rel live state kind rc=0 skip
+  local -a opts=("${RSYNC[@]}" -n --out-format='%i %n') extra=()
+  if [[ -f $src ]]; then
+    [[ -e $dst ]] || {
+      merge::leaf_add "$outn" "$e" '' "$fs" "$repo" add
+      return 0
+    }
+    [[ -f $dst ]] || return 0
+    cmp -s -- "$src" "$dst" && return 0
+    merge::leaf_add "$outn" "$e" '' "$fs" "$repo" chg
+    return 0
+  fi
+  [[ -d $src ]] || return 0
+  [[ $side == restore ]] && opts+=(--delete)
+  [[ $side == backup ]] && opts+=(--max-size="$MAX")
+  skip=$(sync::unreadable "$src")
+  [[ $skip ]] && while IFS= read -r line; do
+    [[ $line ]] && extra+=("--exclude=${line#/}")
+  done <<<"$skip"
+  out=$("${opts[@]}" "${extra[@]}" "$src/" "$dst/" 2>/dev/null) || rc=$?
+  [[ $out ]] || return 0
+  while IFS= read -r line; do
+    [[ $line ]] || continue
+    if [[ $line == '*deleting '* ]]; then
+      rel=${line#'*deleting '}
+      rel=${rel%/}
+      [[ $rel ]] || continue
+      live=$fs/$rel
+      state=$repo/$rel
+      [[ -e $live ]] || continue
+      merge::leaf_add "$outn" "$e" "$rel" "$live" "$state" del
+      continue
+    fi
+    code=${line%% *}
+    rel=${line#* }
+    rel=${rel%/}
+    [[ $code == [\<\>]f* ]] || continue
+    attr=${code:2}
+    [[ $attr != *[!+]* || $attr == *[cs]* ]] || continue
+    [[ $rel ]] || continue
+    live=$fs/$rel
+    state=$repo/$rel
+    kind=chg
+    [[ -e $dst/$rel ]] || kind=add
+    merge::leaf_add "$outn" "$e" "$rel" "$live" "$state" "$kind"
+  done <<<"$out"
+}
+
+# merge::leaves SIDE ES_NAMEREF OUT_NAMEREF
+function merge::leaves {
+  local side=$1
+  local -n _es=$2
+  local outn=$3
+  local -n _out=$3
+  local e fs repo src dst from to
+  _out=()
+  while IFS=$'\t' read -r e fs repo; do
+    sync::ends "$side" "$e" "$fs" "$repo" src dst from to
+    merge::leaf_entry "$side" "$e" "$fs" "$repo" "$src" "$dst" "$outn"
+  done < <(conf::pairs "${_es[@]}")
+}
+
+function merge::leaf_table {
+  local -n _L=$1
+  local rec e rel live state kind newer text path
+  local -a rows=("status"$'\t'"path"$'\t'"note")
+  for rec in "${_L[@]}"; do
+    IFS=$'\t' read -r e rel live state kind newer text <<<"$rec"
+    path=${rel:-$e}
+    ui::row rows "$kind" "$path" "newer=$newer text=$text"
+  done
+  ((${#rows[@]} > 1)) && printf '%s\n' "${rows[@]}" | ui::table
+  ui::nl
+}
+
+# single file copy; no --delete
+function merge::file {
+  local src=$1 dst=$2 rc=0 err
+  local -a opts=("${RSYNC[@]}")
+  ((DRY)) && opts+=(--dry-run)
+  ((DRY)) || mkdir -p "$(dirname "$dst")"
+  [[ -f $src ]] || return 1
+  err=$("${opts[@]}" -- "$src" "$dst" 2>&1) || rc=$?
+  ((rc == 0)) && return 0
+  [[ $err ]] && printf '%s\n' "$err" >&2
+  return "$rc"
+}
+
+# merge::decide SIDE LEAVES PLAN DEFER
+function merge::decide {
+  local side=$1
+  local -n _L=$2 _P=$3 _D=$4
+  local rec e rel live state kind newer text label act out dest src
+  _P=()
+  _D=()
+  for rec in "${_L[@]}"; do
+    IFS=$'\t' read -r e rel live state kind newer text <<<"$rec"
+    label=${rel:-$e}
+    ui::nl
+    ui::log step leaf "$label" "kind=$kind newer=$newer"
+    [[ $kind == chg ]] && ask::yn "git diff?" && merge::diff "$live" "$state"
+    local ow
+    case $side in
+    backup) ow='overwrite: machine → state' ;;
+    restore) ow='overwrite: state → machine' ;;
+    esac
+    local -a opts=("$ow" merge skip)
+    [[ $kind != chg ]] && opts=("$ow" skip)
+    act=$(ask::choose "action · $label" "${opts[@]}") || act=skip
+    case $act in
+    skip) tally skip ;;
+    "$ow") _P+=("overwrite"$'\t'"$rec") ;;
+    merge)
+      ask::yn "git diff before merge?" && merge::diff "$live" "$state"
+      case $side in
+      backup) dest=$state src=$live ;;
+      restore) dest=$live src=$state ;;
+      esac
+      out=$(mktemp)
+      if merge::safe "$dest" "$src" "$out"; then
+        _P+=("merge"$'\t'"$rec"$'\t'"$out")
+        ui::log ok merge "$label"
+      else
+        rm -f -- "$out"
+        _D+=("$rec")
+        ui::log warn merge "deferred $label"
+      fi
+      ;;
+    esac
+  done
+}
+
+function merge::apply_plan {
+  local side=$1
+  local -n _P=$2
+  local line act rec e rel live state kind newer text out rc
+  for line in "${_P[@]}"; do
+    act=${line%%$'\t'*}
+    rec=${line#*$'\t'}
+    out=
+    [[ $act == merge ]] && {
+      out=${rec##*$'\t'}
+      rec=${rec%$'\t'*}
+    }
+    IFS=$'\t' read -r e rel live state kind newer text <<<"$rec"
+    case $act in
+    overwrite)
+      if [[ $kind == del ]]; then
+        ui::log info del "$live"
+        ((DRY)) || rm -rf -- "$live"
+        tally done
+        continue
+      fi
+      case $side in
+      backup)
+        ui::log path '' "$live"
+        rc=0
+        merge::file "$live" "$state" || rc=$?
+        ;;
+      restore)
+        ui::log info '' "$live"
+        rc=0
+        merge::file "$state" "$live" || rc=$?
+        ;;
+      esac
+      ((rc == 0)) && tally done || {
+        tally fail
+        ui::log warn fail "${rel:-$e}"
+      }
+      ;;
+    merge)
+      case $side in
+      backup) ui::log path '' "$state" ;;
+      restore) ui::log info '' "$live" ;;
+      esac
+      if ((DRY)); then
+        ui::log info dry "merge → ${side}"
+        rm -f -- "$out"
+        tally done
+        continue
+      fi
+      case $side in
+      backup)
+        mkdir -p "$(dirname "$state")"
+        mv -f -- "$out" "$state"
+        ;;
+      restore)
+        mkdir -p "$(dirname "$live")"
+        mv -f -- "$out" "$live"
+        ;;
+      esac
+      tally done
+      ;;
+    esac
+  done
+}
+
+function merge::resolve {
+  local side=$1
+  local -n _D=$2
+  local rec e rel live state kind newer text label act
+  ((${#_D[@]})) || return 0
+  ui::nl
+  ui::log step resolve "${#_D[@]} deferred"
+  for rec in "${_D[@]}"; do
+    IFS=$'\t' read -r e rel live state kind newer text <<<"$rec"
+    label=${rel:-$e}
+    ui::nl
+    ui::log warn defer "$label" "newer=$newer"
+    ask::yn "git diff?" && merge::diff "$live" "$state"
+    act=$(ask::choose "resolve · $label" 'use live' 'use state' skip) || act=skip
+    case $act in
+    skip) tally skip ;;
+    'use live')
+      ui::log path '' "$live"
+      ((DRY)) || merge::file "$live" "$state"
+      tally done
+      ;;
+    'use state')
+      ui::log info '' "$live"
+      ((DRY)) || merge::file "$state" "$live"
+      tally done
+      ;;
+    esac
+  done
+}
+
+function merge::plan_es {
+  local -n _P=$1 _D=$2 _out=$3
+  local line rec e
+  local -A seen=()
+  _out=()
+  for line in "${_P[@]}"; do
+    rec=${line#*$'\t'}
+    [[ $line == merge$'\t'* ]] && rec=${rec%$'\t'*}
+    e=${rec%%$'\t'*}
+    [[ -v seen[$e] ]] && continue
+    seen[$e]=1
+    _out+=("$e")
+  done
+  for rec in "${_D[@]}"; do
+    e=${rec%%$'\t'*}
+    [[ -v seen[$e] ]] && continue
+    seen[$e]=1
+    _out+=("$e")
+  done
+}
+
+function merge::keep_es {
+  local -n _es=$1 _P=$2 _D=$3
+  local -A ok=()
+  local e line rec
+  local -a np=() nd=()
+  for e in "${_es[@]}"; do ok[$e]=1; done
+  for line in "${_P[@]}"; do
+    rec=${line#*$'\t'}
+    [[ $line == merge$'\t'* ]] && rec=${rec%$'\t'*}
+    e=${rec%%$'\t'*}
+    [[ -v ok[$e] ]] && np+=("$line")
+  done
+  for rec in "${_D[@]}"; do
+    e=${rec%%$'\t'*}
+    [[ -v ok[$e] ]] && nd+=("$rec")
+  done
+  _P=("${np[@]}")
+  _D=("${nd[@]}")
+}
+
+# vim: ft=bash

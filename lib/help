@@ -90,10 +90,13 @@ ${C2}  $NAME ${c2}backup${r}
   ${c6}2.${r} preview ${c3}machine → state${r} ${it}(content delta +N ~N -N; identical dropped)${r}
   ${c6}3.${r} pick paths? ${c2}Some${r} / ${c2}All${r} ${it}(All = all diffs)${r}
      ${it}Some → multi-select, then preview selection again${r}
-  ${c6}4.${r} ask before write
-  ${c6}5.${r} copy listed paths into ${c6}home/${r} ${c6}root/${r}
-  ${c6}6.${r} prune ignored ${it}(if git)${r} via ${c2}git clean -X${r}, rewrite ${c6}README.md${r} tree
-  ${c6}7.${r} git ship ${it}(optional; if git + dirty)${r}: ask add, commit, push
+  ${c6}4.${r} expand to dirty ${c2}leaf files${r}; show newer ${it}(mtime)${r}
+  ${c6}5.${r} ${c2}Per-file${r} / ${c2}All${r}: All = batch overwrite; Per-file = overwrite / merge / skip each leaf
+     ${it}optional ${c2}git diff --no-index${r}; safe text merge or defer to end queue${r}
+  ${c6}6.${r} ask before write
+  ${c6}7.${r} copy / merge into ${c6}home/${r} ${c6}root/${r}; resolve deferred ${it}(use live / use state / skip)${r}
+  ${c6}8.${r} prune ignored ${it}(if git)${r}, rewrite ${c6}README.md${r} tree
+  ${c6}9.${r} git ship ${it}(optional; if git + dirty)${r}: ask add, commit, push
   Files over ${c1}$((MAX / 1048576)) MiB${r} skipped and warned
   ${C4}DOTKEEP_MAX${r} (MiB) ${c3}default 10${r}, ${c3}max 100${r}; above ${b}100${r} capped and warned
   GitHub rejects over ${c3}100 MiB${r} on push; committed blobs still fail
@@ -115,10 +118,13 @@ ${C3}RESTORE${r}
   ${c6}2.${r} preview ${c3}state → machine${r} ${it}(content delta; identical dropped; may replace live symlink)${r}
   ${c6}3.${r} pick paths? ${c2}Some${r} / ${c2}All${r} ${it}(All = all diffs)${r}
      ${it}Some → multi-select, then preview selection again${r}
-  ${c6}4.${r} ask before write
-  ${c6}5.${r} live targets → ${C2}/tmp/$NAME.XXXXXX/${r} first
-  ${c6}6.${r} prune ignored in state ${it}(if git)${r}, then copy ${it}(rsync --delete)${r}
-  ${c6}7.${r} print safety bak path when anything was saved
+  ${c6}4.${r} expand to dirty ${c2}leaf files${r}; show newer ${it}(mtime)${r}
+  ${c6}5.${r} ${c2}Per-file${r} / ${c2}All${r}: All = batch overwrite ${it}(rsync --delete)${r}; Per-file = leaf overwrite / merge / skip
+     ${it}optional ${c2}git diff --no-index${r}; safe text merge or defer; no --delete in Per-file${r}
+  ${c6}6.${r} ask before write
+  ${c6}7.${r} live targets → ${C2}/tmp/$NAME.XXXXXX/${r} first
+  ${c6}8.${r} prune ignored in state ${it}(if git)${r}, apply, resolve deferred
+  ${c6}9.${r} print safety bak path when anything was saved
   No commit or push on restore
 
   ${C6}new machine${r}

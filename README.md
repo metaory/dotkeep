@@ -24,7 +24,7 @@
 
 ## Install
 
-Needs `bash`, `git`, `rsync`, `tree`, `tput`, `sed`, GNU coreutils, and [gum](https://github.com/charmbracelet/gum)
+Needs `bash`, `git`, `rsync`, `diff`, `tree`, `tput`, `sed`, GNU coreutils, and [gum](https://github.com/charmbracelet/gum)
 
 If `gum` is missing, `dotkeep` offers to install it: `pacman -S gum` when pacman exists, otherwise a GitHub release binary into `~/.local/bin`
 
@@ -39,7 +39,7 @@ git clone https://github.com/metaory/dotkeep
 cd dotkeep
 ```
 
-Layout: `dotkeep` is the control script (vars, flags, dispatch). Logic lives under `lib/` (`gum`, `ui`, `help`, `path`, `conf`, `size`, `git`, `tally`, `sync`).
+Layout: `dotkeep` is the control script (vars, flags, dispatch). Logic lives under `lib/` (`gum`, `ui`, `help`, `path`, `conf`, `size`, `git`, `tally`, `merge`, `sync`).
 Then put it on PATH:
 
 ```sh
@@ -195,7 +195,7 @@ Same names. Same nesting. Home and root in one list
 
 **Copies.** `backup` and `restore` rsync both ways. Live paths stay regular files
 
-**Ask first.** Both commands ask before writing (default no). Optional path pick via `gum choose` (default no = all ok). Restore parks live targets under `/tmp/dotkeep.XXXXXX/` first. Missing parent dirs on the live side are created (`mkdir -p`). A bad path is skipped. The rest is copied
+**Ask first.** Both commands ask before writing (default no). Optional path pick, then dirty leaves with newer (mtime). Choose **All** (batch overwrite) or **Per-file** (overwrite / safe text merge / skip; optional `git diff --no-index`). Unsafe merges defer to an end queue (use live / use state / skip). Restore parks live targets under `/tmp/dotkeep.XXXXXX/` first. Missing parent dirs on the live side are created (`mkdir -p`). A bad path is skipped. The rest is copied
 
 **Git optional.** The store is that file tree. After backup it asks to add, commit, and push (each opt-in, default no). Syncthing or a disk copy can hold the same tree
 
@@ -241,15 +241,20 @@ Run from your **state dir**. Flow:
    - if behind: ask `pull --rebase` (stash first if dirty). Default **no**
 2. Show manifest + preview (`machine → state`); content delta notes; identical paths dropped
 3. Optional **pick a subset** _(**no** keeps all)_ via `gum choose` (multi-select: `x` toggles, enter confirms; all start selected)
-4. Ask before write. Default **no** → abort
-5. Copy each listed path into `home/` / `root/`
-6. Prune ignored paths under `home/` / `root/` via `git clean -X` _(if git)_
-7. Rewrite `README.md` with a `tree` snapshot of the state repo
-8. **Git ship** _(optional; only if `.git` and the tree is dirty)_
+4. Expand to dirty **leaf files**; table shows kind + which side is newer (mtime)
+5. **Per-file** / **All** _(default All)_:
+   - **All** batch-overwrites selected paths (same as before)
+   - **Per-file**: each leaf → optional `git diff --no-index`, then overwrite / merge / skip
+   - Safe merge: both text, common-lines base + `git merge-file`; conflicts go to a deferred list
+6. Ask before write. Default **no** → abort
+7. Apply leaf actions (or path rsync); resolve deferred with use live / use state / skip
+8. Prune ignored paths under `home/` / `root/` via `git clean -X` _(if git)_
+9. Rewrite `README.md` with a `tree` snapshot of the state repo
+10. **Git ship** _(optional; only if `.git` and the tree is dirty)_
    - ask `git add -A` (default **no**)
    - ask commit message (default `snapshot YYYY-MM-DD HH:MM`)
    - ask `git push` if `origin` exists (default **no**; warn and skip if no remote)
-9. Show short status + last 5 commits _(if git)_
+11. Show short status + last 5 commits _(if git)_
 
 > [!IMPORTANT]
 >
@@ -286,11 +291,15 @@ Run from your **state dir**. Flow:
 1. Same **git prep** as backup _(optional; fetch + ask pull if behind)_
 2. Show manifest + preview (`state → machine`); content delta notes; identical paths dropped; live symlinks may be replaced with copies
 3. Optional **pick a subset** _(**no** keeps all)_ via `gum choose` (multi-select: `x` toggles, enter confirms; all start selected)
-4. Ask before write. Default **no** → abort
-5. Copy existing live targets to `/tmp/dotkeep.XXXXXX/` first
-6. Prune ignored paths under state `home/` / `root/` _(if git)_
-7. Copy each listed path onto the live system (`rsync --delete` under those paths; parents created with `mkdir -p`)
-8. Print the safety bak path when anything was saved
+4. Expand to dirty **leaf files**; table shows kind + which side is newer (mtime)
+5. **Per-file** / **All** _(default All)_:
+   - **All** batch-overwrites with `rsync --delete` under listed dirs
+   - **Per-file**: leaf overwrite / merge / skip (no `--delete`); optional `git diff --no-index`; unsafe merges defer
+6. Ask before write. Default **no** → abort
+7. Copy existing live targets to `/tmp/dotkeep.XXXXXX/` first
+8. Prune ignored paths under state `home/` / `root/` _(if git)_
+9. Apply; resolve deferred (use live / use state / skip); parents created with `mkdir -p`
+10. Print the safety bak path when anything was saved
 
 No commit or push on restore.
 
